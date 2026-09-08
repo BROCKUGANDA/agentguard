@@ -1,0 +1,194 @@
+# AgentGuard policy — demo configuration
+# Hot-reloadable by the sidecar on `POST /policies/reload`.
+
+version: "1"
+default: deny                    # zero-trust: explicit allow required
+
+agents:
+  # Default role for any agent that doesn't claim a specific role
+  "*":
+    role: guest
+
+  # Sub-agent identities (from Volcano SDK multi-agent crews)
+  "demo-agent":
+    role: developer
+  "coordinator":
+    role: admin       # coordinator has admin to enable merge_pr demonstrations
+  "filesystem-specialist":
+    role: developer
+  "comms-specialist":
+    role: developer
+  "auditor-specialist":
+    role: reader      # read-only auditor
+  "researcher":
+    role: reader
+  "writer":
+    role: developer
+
+rules:
+
+  # ───────────────────────────────────────────────
+  # 1. Time-window rule — production DB outside hours
+  # ───────────────────────────────────────────────
+  - id: time-window-production-db
+    description: "Production DB access only during business hours UTC"
+    match:
+      tool: "filesystem.delete_file"
+      args:
+        path: "*prod*"
+    decision: deny
+    reason: "Production DB delete blocked outside 09:00–17:00 UTC"
+    conditions:
+      time_window:
+        tz: "UTC"
+        allow:
+          - start: "09:00"
+            end: "17:00"
+            weekdays: [mon, tue, wed, thu, fri]
+        invert: false  # non-inverted: outside allow window → deny (matches rule.decision)
+
+  # ───────────────────────────────────────────────
+  # 2. PII redaction on outbound email args
+  #    decision: redact → the email IS SENT, but matched patterns are masked
+  #    first (wrapMCP substitutes redactedArgs for the original args). The
+  #    audit trail records the masked version, never the raw PII.
+  # ───────────────────────────────────────────────
+  - id: pii-redact-email
+    description: "Mask SSN / credit-card / email-as-data in outbound emails"
+    match:
+      tool: "email.send"
+    decision: redact
+    reason: "PII redacted from email payload"
+    conditions:
+      data_classification:
+        patterns:
+          - name: us_ssn
+            regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+          - name: credit_card
+            regex: "\\b(?:\\d[ -]*?){13,16}\\b"
+          - name: email_address
+            regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        match_on:
+          - "args.subject"
+          - "args.body"
+          - "args.to"
+
+  # ───────────────────────────────────────────────
+  # 3. RBAC — guest cannot read sensitive files
+  # ───────────────────────────────────────────────
+  - id: rbac-guest-cannot-read-secrets
+    description: "guest role cannot read files under /secrets"
+    match:
+      tool: "filesystem.read_file"
+      args:
+        path: "*secrets*"
+    decision: deny
+    reason: "guest role denied access to secrets"
+    conditions:
+      rbac:
+        role: guest
+        resource: "filesystem.read_file"
+        action: deny
+
+  # ───────────────────────────────────────────────
+  # 4. Rate limit — flood protection per agent per tool
+  # ───────────────────────────────────────────────
+  - id: rate-limit-read-file
+    description: "Read at most 30/min per agent"
+    match:
+      tool: "filesystem.read_file"
+    decision: deny
+    reason: "Rate limit exceeded (30/min)"
+    conditions:
+      rate_limit:
+        max: 30
+        window: "1m"
+        scope: agent_tool
+
+  # ───────────────────────────────────────────────
+  # 5. RBAC — developer can do most things
+  # ───────────────────────────────────────────────
+  - id: rbac-developer-allow
+    description: "developer role can read+write+delete most files (except prod)"
+    match:
+      tool: ["filesystem.read_file", "filesystem.write_file", "filesystem.delete_file"]
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
+
+  # ───────────────────────────────────────────────
+  # 6. GitHub — PII in issue bodies
+  # ───────────────────────────────────────────────
+  - id: github-no-pii-in-issues
+    description: "Block GitHub issues containing PII in body or title"
+    match:
+      tool: "github.create_issue"
+    decision: deny
+    reason: "PII detected in GitHub issue body"
+    conditions:
+      data_classification:
+        patterns:
+          - name: us_ssn
+            regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+          - name: credit_card
+            regex: "\\b(?:\\d[ -]*?){13,16}\\b"
+          - name: email_address
+            regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        match_on:
+          - "args.body"
+          - "args.title"
+
+  # ───────────────────────────────────────────────
+  # 7. GitHub — merge_pr requires admin
+  # ───────────────────────────────────────────────
+  - id: github-merge-requires-admin
+    description: "Only admin role can merge pull requests"
+    match:
+      tool: "github.merge_pull_request"
+    decision: deny
+    reason: "Only admins can merge PRs"
+    conditions:
+      rbac:
+        role: [guest, developer, reader]
+        action: deny
+
+  # ───────────────────────────────────────────────
+  # 8. GitHub — issue creation rate limit
+  # ───────────────────────────────────────────────
+  - id: github-issue-rate-limit
+    description: "Max 5 issues per minute per agent"
+    match:
+      tool: "github.create_issue"
+    decision: deny
+    reason: "Issue creation rate limit exceeded (5/min)"
+    conditions:
+      rate_limit:
+        max: 5
+        window: "1m"
+        scope: agent_tool
+
+  # ───────────────────────────────────────────────
+  # 9. GitHub — read-only ops allow everyone
+  # ───────────────────────────────────────────────
+  - id: github-read-allow
+    description: "Everyone can list repos and PRs"
+    match:
+      tool: ["github.list_repos", "github.list_pull_requests"]
+    decision: allow
+    conditions:
+      rbac:
+        role: [guest, developer, admin, reader]
+        action: allow
+
+# ───────────────────────────────────────────────
+# Alerting — fire webhook on critical denies
+# ───────────────────────────────────────────────
+alerts:
+  - on_decision: deny
+    severity: critical
+    webhook: "${AGENTGUARD_SLACK_WEBHOOK}"
+  - on_decision: deny
+    severity: critical
+    rule_ids: ["time-window-production-db", "pii-redact-email"]

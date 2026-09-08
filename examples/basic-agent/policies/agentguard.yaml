@@ -1,0 +1,94 @@
+# AgentGuard policy — basic-agent example
+# Zero-trust: everything is denied unless a rule explicitly allows it.
+
+version: "1"
+default: deny
+
+agents:
+  "*":
+    role: guest
+  "assistant":
+    role: developer
+
+rules:
+  - id: rbac-file-read
+    description: "developer/admin/reader can read files"
+    match:
+      tool: "filesystem.read_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin, reader]
+        action: allow
+
+  - id: rbac-secrets-deny
+    description: "guest cannot read anything under /secrets"
+    match:
+      tool: "filesystem.read_file"
+      args:
+        path: "*secrets*"
+    decision: deny
+    reason: "guest role denied access to secrets"
+    conditions:
+      rbac:
+        role: guest
+        action: deny
+
+  - id: rbac-write-developer
+    description: "developer/admin can write files"
+    match:
+      tool: "filesystem.write_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
+
+  - id: rbac-delete-members-only
+    description: "delete requires developer or admin"
+    match:
+      tool: "filesystem.delete_file"
+    decision: deny
+    reason: "delete requires developer or admin role"
+    conditions:
+      rbac:
+        role: [guest, reader]
+        action: deny
+
+  - id: pii-redact-email
+    description: "MASK SSN / embedded emails in outbound email (call allowed, PII scrubbed)"
+    match:
+      tool: "email.send"
+    decision: redact
+    reason: "PII redacted from email payload"
+    conditions:
+      data_classification:
+        patterns:
+          - name: us_ssn
+            regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+          - name: email_address
+            regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        match_on: ["args.subject", "args.body"]
+        replacement: "[REDACTED]"
+
+  - id: email-allow-clean
+    description: "Non-PII email allowed for developer/admin"
+    match:
+      tool: "email.send"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
+
+  - id: rate-limit-default
+    description: "Max 120 calls/min per agent-tool"
+    match:
+      tool: "*"
+    decision: deny
+    reason: "Rate limit exceeded (120/min)"
+    conditions:
+      rate_limit:
+        max: 120
+        window: "1m"
+        scope: agent_tool

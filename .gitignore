@@ -1,0 +1,44 @@
+node_modules/
+dist/
+build/
+.cache/
+.turbo/
+*.log
+*.tsbuildinfo
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# audit (runtime SQLite — never commit live data)
+*.db
+*.db-journal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+data/
+
+# editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# coverage
+coverage/
+.nyc_output/
+
+# demo scratch
+demo/.scratch/
+
+# internal agent state — not for hackathon judges
+.sisyphus/
+.codeartsdoer/
+.claude/
+AGENTS.md
+docs/laravel-boost-guidelines.md
+
+# GitHub Actions — intentionally omitted (no CI/CD for this submission)
+.github/workflows/

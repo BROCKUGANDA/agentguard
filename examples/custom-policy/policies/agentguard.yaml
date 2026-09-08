@@ -1,0 +1,74 @@
+# AgentGuard policy — custom-policy example
+# A hand-written policy: everything is denied unless an explicit rule allows it.
+# Edit this file and POST /policies/reload — no restart needed.
+
+version: "1"
+default: deny
+
+agents:
+  "*":
+    role: guest
+  "worker":
+    role: developer
+
+rules:
+  # Custom rule 1: .env files are NEVER readable — credentials live there.
+  - id: secret-env-guard
+    description: "Never read dot-env files (credentials)"
+    match:
+      tool: "filesystem.read_file"
+      args:
+        path: "*.env*"
+    decision: deny
+    reason: "dot-env files contain credentials — blocked by secret-env-guard"
+    conditions:
+      rbac:
+        role: [guest, developer, admin, reader]
+        action: deny
+
+  # Custom rule 2: writes are jailed to /sandbox.
+  - id: sandbox-write-allow
+    description: "Writes inside /sandbox allowed for developer/admin"
+    match:
+      tool: "filesystem.write_file"
+      args:
+        path: "/sandbox*"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
+
+  - id: sandbox-write-deny
+    description: "Any write outside /sandbox is blocked"
+    match:
+      tool: "filesystem.write_file"
+    decision: deny
+    reason: "writes restricted to /sandbox"
+    conditions:
+      rbac:
+        role: [guest, developer, admin, reader]
+        action: deny
+
+  # Custom rule 3: reads are for trusted roles only.
+  - id: read-trusted-roles
+    description: "developer/admin/reader can read non-secret files"
+    match:
+      tool: "filesystem.read_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin, reader]
+        action: allow
+
+  - id: custom-rate-limit
+    description: "Max 30 calls/min per agent"
+    match:
+      tool: "*"
+    decision: deny
+    reason: "Rate limit exceeded (30/min)"
+    conditions:
+      rate_limit:
+        max: 30
+        window: "1m"
+        scope: agent

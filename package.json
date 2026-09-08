@@ -1,0 +1,44 @@
+{
+  "name": "agentguard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-Agent Security Orchestrator for AI Workflows — intercepts @volcano.dev/agent MCP tool calls, evaluates them against policy-as-code, and logs tamper-evident audit chains.",
+  "workspaces": [
+    "packages/*",
+    "demo",
+    "demo/mcp-filesystem",
+    "demo/mcp-email",
+    "demo/mcp-github",
+    "demo/mcp-database",
+    "demo/mcp-slack",
+    "demo/mcp-http",
+    "examples/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "dev:sidecar": "npm run dev --workspace packages/sidecar",
+    "dev:dashboard": "npm run dev --workspace packages/dashboard",
+    "dev:demo": "npm run demo --workspace @agentguard/demo",
+    "demo": "npm run demo --workspace @agentguard/demo",
+    "audit:verify": "npm run audit:verify --workspace packages/sidecar",
+    "docker:build": "docker build -t agentguard:0.1.0 .",
+    "docker:build:multiarch": "docker buildx build --platform linux/amd64,linux/arm64 -t agentguard:0.1.0 .",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true
+  }
+}

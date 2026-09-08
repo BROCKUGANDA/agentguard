@@ -1,0 +1,59 @@
+{
+  "name": "@agentguard/cli",
+  "version": "0.1.0",
+  "description": "AgentGuard CLI — multi-agent security orchestrator for AI workflows",
+  "type": "module",
+  "bin": {
+    "agentguard": "./dist/index.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "templates",
+    "README.md"
+  ],
+  "exports": {
+    ".": "./dist/index.js",
+    "./templates/*": "./templates/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "test": "vitest run --passWithNoTests",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@agentguard/core": "*",
+    "@agentguard/sidecar": "*",
+    "yaml": "^2.5.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.1.0",
+    "inquirer": "^12.0.0",
+    "ora": "^8.1.1",
+    "undici": "^6.20.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.0",
+    "@types/node": "^22.7.0"
+  },
+  "keywords": [
+    "ai-agents",
+    "security",
+    "policy-engine",
+    "audit-log",
+    "mcp",
+    "volcano",
+    "agentguard",
+    "rbac",
+    "compliance"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.5.0"
+  }
+}

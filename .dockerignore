@@ -1,0 +1,17 @@
+# Build context minimisation — everything below is rebuilt inside the image
+node_modules
+**/node_modules
+**/dist
+**/coverage
+.git
+.gitignore
+tmp_inspect
+**/*.sqlite
+**/*.sqlite-wal
+**/*.sqlite-shm
+data
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store

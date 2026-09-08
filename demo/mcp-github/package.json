@@ -1,0 +1,21 @@
+{
+  "name": "@agentguard/demo-mcp-github",
+  "version": "0.1.0",
+  "private": true,
+  "description": "stdio MCP server with mock GitHub operations (list_repos, create_issue, list_prs)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.20.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2",
+    "@types/node": "^22.7.0"
+  }
+}

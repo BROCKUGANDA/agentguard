@@ -1,0 +1,82 @@
+:root {
+  /* Brand */
+  --color-primary: #E63946;
+  --color-primary-hover: #D62828;
+  --color-primary-light: #FF6B6B;
+
+  /* Secondary */
+  --color-secondary: #457B9D;
+  --color-secondary-hover: #3A6B8C;
+
+  /* Semantic */
+  --color-success: #2A9D8F;
+  --color-warning: #F4A261;
+  --color-error: #D62828;
+  --color-info: #457B9D;
+
+  /* Surfaces */
+  --color-bg: #F8F9FA;
+  --color-surface: #FFFFFF;
+  --color-border: #E5E7EB;
+
+  /* Text */
+  --color-text: #2B2D42;
+  --color-text-muted: #4B5563;
+
+  /* Status pills */
+  --color-secure: #2A9D8F;
+  --color-blocked: #D62828;
+  --color-pending: #F4A261;
+
+  /* Spacing */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 16px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-2xl: 48px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-full: 9999px;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.07), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.10), 0 4px 6px -4px rgb(0 0 0 / 0.05);
+  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.12), 0 8px 10px -6px rgb(0 0 0 / 0.05);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-primary: #FF6B6B;
+    --color-primary-hover: #E63946;
+    --color-primary-light: #FF8A8A;
+
+    --color-secondary: #6B9DC4;
+    --color-secondary-hover: #457B9D;
+
+    --color-success: #4FBDB0;
+    --color-warning: #F4B584;
+    --color-error: #FF6B6B;
+    --color-info: #6B9DC4;
+
+    --color-bg: #0F1117;
+    --color-surface: #1A1D27;
+    --color-border: #2D3142;
+
+    --color-text: #E8EAED;
+    --color-text-muted: #9AA0A6;
+
+    --color-secure: #4FBDB0;
+    --color-blocked: #FF6B6B;
+    --color-pending: #F4B584;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+    --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.4), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+    --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.5), 0 4px 6px -4px rgb(0 0 0 / 0.3);
+    --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.6), 0 8px 10px -6px rgb(0 0 0 / 0.4);
+  }
+}

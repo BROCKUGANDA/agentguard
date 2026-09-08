@@ -1,0 +1,126 @@
+# AgentGuard policy — multi-agent-crew example
+# A coordinator + specialist crew; every specialist has a distinct role and
+# the SAME tools are governed differently per role.
+
+version: "1"
+default: deny
+
+agents:
+  "*":
+    role: guest
+  "coordinator":
+    role: admin
+  "analyst":
+    role: reader
+  "operator":
+    role: developer
+  "auditor":
+    role: auditor
+
+rules:
+  - id: crew-file-read
+    description: "Everyone except guest can read files"
+    match:
+      tool: "filesystem.read_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin, reader, auditor]
+        action: allow
+
+  - id: crew-secrets-deny
+    description: "guest cannot read anything under /secrets"
+    match:
+      tool: "filesystem.read_file"
+      args:
+        path: "*secrets*"
+    decision: deny
+    reason: "guest role denied access to secrets"
+    conditions:
+      rbac:
+        role: guest
+        action: deny
+
+  - id: crew-write-developer
+    description: "Only developer/admin can write files (auditor is read-only)"
+    match:
+      tool: "filesystem.write_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
+
+  - id: crew-email-pii-block
+    description: "Block email carrying SSN / embedded email"
+    match:
+      tool: "email.send"
+    decision: deny
+    reason: "PII detected in email payload"
+    conditions:
+      data_classification:
+        patterns:
+          - name: us_ssn
+            regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+          - name: email_address
+            regex: "\\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Z|a-z]{2,}\\b"
+        match_on: ["args.subject", "args.body"]
+
+  - id: crew-email-allow
+    description: "Non-PII email allowed for developer/admin"
+    match:
+      tool: "email.send"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
+
+  - id: crew-merge-admin-allow
+    description: "Only admin can merge pull requests"
+    match:
+      tool: "github.merge_pull_request"
+    decision: allow
+    conditions:
+      rbac:
+        role: [admin]
+        action: allow
+
+  - id: crew-merge-others-deny
+    description: "Everyone else is denied merges"
+    match:
+      tool: "github.merge_pull_request"
+    decision: deny
+    reason: "Only admins can merge PRs"
+    conditions:
+      rbac:
+        role: [guest, developer, reader, auditor]
+        action: deny
+
+  - id: crew-github-read-everyone
+    description: "Listing repos/PRs is safe for all roles"
+    match:
+      tool: ["github.list_repos", "github.list_pull_requests"]
+    decision: allow
+    conditions:
+      rbac:
+        role: [guest, developer, admin, reader, auditor]
+        action: allow
+
+  - id: crew-rate-limit
+    description: "Max 60 calls/min per agent"
+    match:
+      tool: "*"
+    decision: deny
+    reason: "Rate limit exceeded (60/min)"
+    conditions:
+      rate_limit:
+        max: 60
+        window: "1m"
+        scope: agent
+
+alerts:
+  - on_decision: deny
+    severity: critical
+    rule_ids: ["crew-email-pii-block", "crew-merge-others-deny"]
+    webhook: "${AGENTGUARD_SLACK_WEBHOOK}"

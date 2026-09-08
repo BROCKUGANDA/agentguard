@@ -1,0 +1,49 @@
+# AgentGuard docker-compose — single-image deployment with persistent audit data.
+# Multi-tenant mode is ON: each tenant id (X-Tenant-Id header) gets its own policy
+# file, audit DB and live stream, auto-provisioned on first request.
+#   - policies/<tenant>.yaml  → auto-created (writable mount)
+#   - audit for tenant <id>    → <volume>/tenants/<id>/audit.sqlite
+#   - default tenant policy    → policies/agentguard.yaml (hot-reloadable)
+
+services:
+  agentguard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: agentguard:0.1.0
+    container_name: agentguard
+    restart: unless-stopped
+    ports:
+      - "9559:9559"   # sidecar API + WebSocket
+      - "5173:5173"   # dashboard (web UI)
+    environment:
+      NODE_ENV: production
+      AGENTGUARD_BIND_ALL: "1"
+      AGENTGUARD_POLICY_FILE: /policies/agentguard.yaml
+      AGENTGUARD_TENANT_DATA_DIR: /data
+      AGENTGUARD_TENANT_POLICY_DIR: /policies
+      # Webhook for critical alert delivery (optional)
+      AGENTGUARD_SLACK_WEBHOOK: ${AGENTGUARD_SLACK_WEBHOOK:-}
+      # OpenTelemetry export (optional)
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    volumes:
+      # Persist audit chains (all tenants) across restarts
+      - agentguard-data:/data
+      # Policies, hot-reloaded by the sidecar. Read-write so new tenants
+      # auto-provision their <tenant>.yaml here on first request.
+      - ./policies:/policies
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:9559/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  agentguard-data:
+    driver: local
