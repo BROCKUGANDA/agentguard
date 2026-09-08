@@ -5,6 +5,7 @@ build/
 .turbo/
 *.log
 *.tsbuildinfo
+*.mp3
 
 # env
 .env
@@ -38,7 +39,16 @@ demo/.scratch/
 .codeartsdoer/
 .claude/
 AGENTS.md
+.merkle-snapshot.json
+
+# internal docs / production aids — not for judges
+docs/DEMO_SCRIPT.md
+docs/narration/
+docs/DEMO.md
+docs/DESIGN-SYSTEM.md
 docs/laravel-boost-guidelines.md
+scripts/generate_tts.py
 
 # GitHub Actions — intentionally omitted (no CI/CD for this submission)
 .github/workflows/
+.github/dependabot.yml

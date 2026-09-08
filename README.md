@@ -1,284 +1,322 @@
-# 🛡️ AgentGuard
+# AgentGuard
 
-> Multi-Agent Security Orchestrator for AI Workflows — policy-as-code guardrails for [@volcano.dev/agent](https://volcano.dev/) MCP tool calls, with PII redaction, a tamper-evident audit chain, a real-time dashboard, and an MCP server mode.
+> **Multi-Agent Security Orchestrator for AI Workflows**
+>
+> Policy-as-code guardrails for AI agent tool calls — RBAC, rate limits, time windows, PII redaction, a tamper-evident audit chain, and a real-time dashboard. Built on the [Volcano ADK](https://volcano.dev/).
 
-Every tool call your agent makes is evaluated **before it executes**: RBAC, rate limits, time windows, PII redaction. Decisions are written to a SHA-256 hash-chained audit log. The dashboard streams them live. The agent *cannot* bypass it — the guard sits between the agent and the tool.
+AI agents are autonomous. They read files, send emails, query databases, merge pull requests. **Nothing stops them** from making a destructive call — until now.
+
+AgentGuard sits **between your agent and the tool**. Every call is evaluated **before it executes**. Denied calls never run. Allowed calls run with optional PII redaction. Every decision is written to a SHA-256 hash-chained audit log and streamed live to a dashboard.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│ Agent (@volcano.dev/agent)                                   │
-│   guardedFs    = wrapMCP(filesystemMcp, { mcpId, agentId })  │
-│   guardedEmail = wrapMCP(emailMcp,     { mcpId, agentId })   │
-└───────────────────────────┬──────────────────────────────────┘
-                            │ POST /check (every tool call)
-                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│ AgentGuard sidecar (Node + Fastify)  · multi-tenant           │
-│  /check          policy decision → allow | deny | redact      │
-│  /audit/recent · /audit/verify      hash-chained SQLite      │
-│  /policies  GET/POST reload         policy-as-code hot swap  │
-│  /tenants                          per-tenant isolation      │
-│  WS /stream                        live events → dashboard   │
-└──────────────┬───────────────────────────────┬───────────────┘
-               │ WebSocket                     │ same-origin /api
-               ▼                               ▼
-┌────────────────────────────────────────────┐
-│ Dashboard (React + Vite, :5173)             │
-│  Live feed · Audit chain · Policies · Agents│
-└────────────────────────────────────────────┘
+Agent (Volcano SDK)
+  │
+  ├─ wrapMCP(filesystemMcp)  ──► POST /check ──► Policy Engine
+  ├─ wrapMCP(emailMcp)       ──► POST /check ──► RBAC + rate limit
+  └─ wrapMCP(githubMcp)      ──► POST /check ──► PII redaction
+                                                    │
+                                          ┌─────────┤
+                                          ▼         ▼
+                                     allow/redact   deny
+                                          │         │
+                                          ▼         ▼
+                                     tool runs   blocked error
+                                          │
+                                          ▼
+                                 SHA-256 audit chain
+                                          │
+                                          ▼
+                                 WebSocket → Dashboard
 ```
 
 ---
 
-## 🚀 Run in 60 seconds (Docker)
+## Quick Start
 
-The image runs **both** the sidecar and the dashboard in one container, multi-arch (`linux/amd64` + `linux/arm64`), with healthchecks and a non-root user.
+### Option 1: Docker (recommended)
 
 ```bash
 docker compose up -d --build
-
-# dashboard → http://localhost:5173
-# sidecar   → http://localhost:9559  (curl http://localhost:9559/health)
 ```
 
-Send a test decision from another terminal (the container runs in multi-tenant
-mode — scope it with `X-Tenant-Id`, `default` works out of the box):
+- **Dashboard**: http://localhost:5173
+- **Sidecar API**: http://localhost:9559
+- **Health check**: `curl http://localhost:9559/health`
+
+### Option 2: Local Dev
+
+**Prerequisites**: Node.js >= 22.5 ([download](https://nodejs.org/) or `scoop install nodejs`)
+
+```bash
+# 1. Install dependencies
+npm install
+
+# 2. Build all packages
+npm run build
+
+# 3. Start the sidecar (terminal 1)
+NODE_OPTIONS=--experimental-sqlite npx tsx packages/sidecar/src/server.ts
+
+# 4. Start the dashboard (terminal 2)
+npx vite --config packages/dashboard/vite.config.ts
+```
+
+Open http://localhost:5173 in your browser.
+
+> **Windows**: Use the included `start-dev.bat` to start both servers at once.
+
+### Option 3: Verify the Audit Chain (no LLM needed)
+
+```bash
+# Start the sidecar
+npx agentguard serve --policy ./policies/agentguard.yaml
+
+# Run the deterministic crew smoke test
+cd examples/deterministic-crew && npm run smoke
+```
+
+---
+
+## Try It
+
+Once the sidecar is running, send policy decisions and watch them appear live on the dashboard:
+
+### Block a guest from reading secrets
 
 ```bash
 curl -X POST http://localhost:9559/check \
   -H "Content-Type: application/json" \
   -H "X-Tenant-Id: default" \
-  -d '{"tool":"email.send","agentId":"demo-agent","role":"developer","args":{"to":"hr@x.com","subject":"SSN 123-45-6789"}}'
-# → {"allow":true,"reason":"PII redacted from email payload",
-#    "redactedArgs":{"subject":"SSN [REDACTED:us_ssn] attached", ...}}
+  -d '{"tool":"filesystem.read_file","agentId":"guest-bot","role":"guest","args":{"path":"/secrets/api-key"}}'
 ```
 
-Refresh the dashboard — the redact decision is in the live feed with the **masked** args (the raw SSN never reaches disk), and clicking **Audit → Verify** proves the chain.
+Response: `{"allow":false,"reason":"guest role denied access to secrets",...}`
 
-**Multi-tenant by default.** Every `X-Tenant-Id` header gets its own policy file and audit DB, auto-provisioned on first request:
+### Redact PII from an email
 
 ```bash
-curl -X POST http://localhost:9559/check -H "X-Tenant-Id: acme" \
-  -d '{"tool":"filesystem.read_file","agentId":"bot","args":{"path":"/tmp/x"}}'
-# creates policies/acme.yaml + data/tenants/acme/audit.sqlite
+curl -X POST http://localhost:9559/check \
+  -H "Content-Type: application/json" \
+  -H "X-Tenant-Id: default" \
+  -d '{"tool":"email.send","agentId":"demo-agent","role":"developer","args":{"to":"hr@x.com","subject":"SSN 123-45-6789 attached"}}'
 ```
 
-The dashboard switches tenants in **Settings → Tenant**.
+Response: `{"allow":true,"reason":"PII redacted from email payload","redactedArgs":{"subject":"SSN [REDACTED:us_ssn] attached",...}}`
+
+### Verify the audit chain
+
+```bash
+curl -X POST http://localhost:9559/audit/verify \
+  -H "X-Tenant-Id: default"
+```
+
+Response: `{"valid":true,"count":58,"verified":true,...}`
 
 ---
 
-## 🔌 Embed in your agent (npm install)
+## Embed in Your Agent
 
 ```bash
 npm install @agentguard/core
 ```
 
-Wrap any MCP handle — every tool call goes through the sidecar first:
-
 ```ts
 import { agent, llmOpenAI, mcpStdio } from "@volcano.dev/agent";
 import { wrapMCP } from "@agentguard/core";
 
+// Wrap any MCP handle — every tool call goes through the sidecar first
 const guardedFs = wrapMCP(filesystemMcp, {
   sidecarUrl: "http://localhost:9559",
-  mcpId: "filesystem",                       // policy-friendly tool name
+  mcpId: "filesystem",
   agentId: "my-agent",
-  agentRole: "developer",
-  failClosed: true,                          // deny when sidecar unreachable
-  onDecision: (d, ctx) => console.log(d.allow ? "✅" : "🚫", ctx.toolName),
+  agentRole: "developer",        // RBAC role
+  failClosed: true,              // deny when sidecar unreachable
+  filterTools: true,             // hide disallowed tools from the LLM (default)
 });
 
+// Use it normally — the guard is transparent
 const result = await agent({ llm: llmOpenAI({ apiKey }), name: "my-agent" })
   .then({ prompt: "Write a report to /tmp/report.md", mcps: [guardedFs] })
   .run();
 ```
 
-> `mcpId` maps the SDK's hashed handle ids (`mcp_3f9a2b1c.read_file`) to
-> stable names your policy can match (`filesystem.read_file`).
+### Automatic Tool Selection
 
-**Policy** (`policies/agentguard.yaml`) is plain YAML — no DSL to learn:
+When `filterTools: true` (default), `listTools()` is filtered so the LLM **only sees tools its role can call**. A guest agent never sees `delete_file`. A reader never sees `merge_pull_request`. This saves tokens and prevents wasted attempts.
+
+---
+
+## Policy Language
+
+Policies are plain YAML — no DSL to learn. Hot-reloadable without restart.
 
 ```yaml
 version: "1"
-default: deny
+default: deny                    # zero-trust: explicit allow required
+
 agents:
-  "*":      { role: guest }
-  "my-agent": { role: developer }
+  "*":          { role: guest }
+  "coordinator": { role: admin }
+  "developer":  { role: developer }
+  "auditor":    { role: reader }
+
 rules:
-  - id: pii-block-email
-    match: { tool: "email.send" }
+  - id: guest-cannot-read-secrets
+    match: { tool: "filesystem.read_file", args: { path: "*secrets*" } }
     decision: deny
-    reason: "PII detected in payload"
+    conditions: { rbac: { role: guest, action: deny } }
+
+  - id: pii-redact-email
+    match: { tool: "email.send" }
+    decision: redact             # allow but mask PII
     conditions:
       data_classification:
         patterns:
           - { name: us_ssn, regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b" }
         match_on: ["args.subject", "args.body"]
-```
 
-Rule types: **RBAC** roles · **rate_limit** · **time_window** · **data_classification** (PII deny **or redact**). See [`docs/POLICY-LANGUAGE.md`](docs/POLICY-LANGUAGE.md).
-
-### Redact: allow the call, mask the PII
-
-`decision: redact` lets the email go out — but matched patterns are stripped first, and `wrapMCP` transparently substitutes the masked args. The audit trail records the masked version, so raw PII never touches disk:
-
-```yaml
-  - id: pii-redact-email
-    match:
-      tool: "email.send"
-    decision: redact               # not deny — mask and allow
-    reason: "PII redacted from email payload"
+  - id: prod-db-only-business-hours
+    match: { tool: "filesystem.delete_file", args: { path: "*prod*" } }
+    decision: deny
     conditions:
-      data_classification:
-        patterns:
-          - name: us_ssn
-            regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
-        match_on: ["args.subject", "args.body"]
-        replacement: "[REDACTED]"   # optional; default [REDACTED:<name>]
+      time_window: { tz: UTC, allow: [{ start: "09:00", end: "17:00" }] }
 ```
 
-## Scaffold a whole project
-
-```bash
-npx agentguard init my-agent --template gdpr        # starter | gdpr | finance-pii |
-cd my-agent                                        #   healthcare-hipaa | dev-strict |
-cp .env.example .env                               #   prod-permissive
-npx agentguard serve --policy ./policies/agentguard.yaml
-npm run dev
-```
-
-```bash
-npx agentguard templates                 # list built-in policy templates
-npx agentguard validate policies/*.yaml  # lint policy YAML
-npx agentguard audit-verify ./data/audit.sqlite   # verify the hash chain
-npx agentguard doctor                    # env + policy + sidecar + chain + security posture
-npx agentguard export-audit ./data/audit.sqlite --out ./evidence   # compliance export
-```
-
-### `agentguard doctor` — pre-flight check
-
-```
-🛡️  AgentGuard doctor
-  ✓ Node.js version  — v24.4.1 (node:sqlite available)
-  ✓ Policy file (policies/agentguard.yaml)  — valid — 9 rules, default: deny
-  ✓ Sidecar (http://localhost:9559)  — v0.1.0 · 9 rules · 3 audit entries
-  ⊘ Audit DB (./data/audit.sqlite)  — not created yet (appears after the first /check)
-  ⚠ Admin token (AGENTGUARD_ADMIN_TOKEN)  — not set — admin routes open in dev
-```
-
-### `agentguard export-audit` — compliance evidence
-
-Exports the audit log as JSONL plus a summary with per-agent/per-tool
-breakdowns, chain verification, and a SHA-256 receipt of the export itself —
-auditors can prove the evidence file wasn't altered after generation.
-
-### `agentguard mcp` — use AgentGuard from Claude Desktop & any MCP host
-
-AgentGuard runs as an MCP server over stdio, exposing four read-only tools:
-`agentguard_check` (would this call be allowed/denied/redacted?), 
-`agentguard_audit_verify`, `agentguard_policy_view`, `agentguard_recent_denials`.
-Add to `claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "agentguard": {
-      "command": "npx",
-      "args": ["agentguard", "mcp"],
-      "env": { "AGENTGUARD_SIDECAR_URL": "http://localhost:9559" }
-    }
-  }
-}
-```
-
-Your AI assistant can now consult the policy engine *before* invoking risky
-tools — and every consultation lands in the same tamper-evident audit log.
+Rule types: **RBAC** | **rate_limit** | **time_window** | **data_classification** (deny or redact)
 
 ---
 
-## 🏭 Deploy to production
+## Features
 
-`docker compose up` IS the production shape — persistent audit volume, hot-reloadable policy mount, restart policy, healthcheck, capped logs. Production knobs:
+| Feature | Description |
+|---------|-------------|
+| **Policy enforcement** | Every tool call evaluated before execution — allow, deny, or redact |
+| **Automatic tool selection** | LLM only sees tools its role can call (`filterTools`) |
+| **RBAC** | Role-based access control — guest, reader, developer, admin |
+| **Rate limiting** | Per-agent, per-tool token bucket |
+| **Time windows** | Schedule-based access (e.g. prod DB only 09:00-17:00 UTC) |
+| **PII redaction** | SSN, credit card, email masking — raw PII never touches disk |
+| **Audit chain** | SHA-256 hash-chained log — tamper-evident, verifiable |
+| **Real-time dashboard** | WebSocket live feed, KPIs, agent status, policy viewer |
+| **Multi-agent crews** | `.then()`, `.parallel()`, `.branch()`, `.forEach()` orchestration |
+| **Multi-tenant** | Per-tenant policy + audit DB isolation |
+| **Alerting** | Slack webhook on critical denies (SSRF-guarded) |
+| **Observability** | OpenTelemetry traces + metrics |
+| **MCP server mode** | AgentGuard as a read-only MCP tool for Claude Desktop |
+
+---
+
+## Multi-Agent Crews
+
+AgentGuard supports all Volcano SDK orchestration patterns:
+
+```ts
+// Sequential
+await agent({ llm, name: "crew" })
+  .then({ prompt: "Read report.csv", mcps: [guardedFs] })
+  .then({ prompt: "Email summary", mcps: [guardedEmail] })
+  .run();
+
+// Parallel batch
+await agent({ llm, name: "crew" })
+  .parallel([
+    { prompt: "Write logs", mcps: [guardedFs] },
+    { prompt: "Write metrics", mcps: [guardedFs] },
+  ])
+  .run();
+
+// Conditional fallback
+await agent({ llm, name: "crew" })
+  .branch(
+    (history) => !history.some(h => h.failed),
+    { true: (a) => a.then({ prompt: "Delete temp", mcps: [guardedFs] }),
+      false: (a) => a.then({ prompt: "Log blocked", mcps: [guardedFs] }) }
+  )
+  .run();
+```
+
+Each agent gets its own role with different tool access — enforced by policy, not prompts.
+
+---
+
+## Production Ready
 
 ```bash
 # .env
-AGENTGUARD_ADMIN_TOKEN=$(openssl rand -base64 32)  # protect /policies/reload,
-                                                   # /alerts/recent, /alerts/test-fire
-AGENTGUARD_SLACK_WEBHOOK=https://hooks.slack.com/services/...  # critical-deny alerts
-OTEL_EXPORTER_OTLP_ENDPOINT=http://otel:4318       # traces + metrics
+AGENTGUARD_ADMIN_TOKEN=$(openssl rand -base64 32)     # protect admin routes
+AGENTGUARD_SLACK_WEBHOOK=https://hooks.slack.com/...   # critical-deny alerts
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel:4318           # traces + metrics
 ```
 
-- **Multi-arch**: `npm run docker:build:multiarch` (`docker buildx --platform linux/amd64,linux/arm64`)
-- **Hardened**: non-root `agentguard` user, `tini` signals, OWASP headers, CSP, 1 MB body cap, per-IP rate limit (600/min) on every route, webhook SSRF guard, PII scrubbed from logs, errors and the audit store at rest.
-- **Fail closed**: with `NODE_ENV=production` and no `AGENTGUARD_ADMIN_TOKEN`, admin routes refuse to serve (503) instead of opening to the internet.
-- **Zero native deps**: the audit chain runs on Node's built-in `node:sqlite` — `npm install` never compiles anything, on any Node ≥ 22.5 / any architecture.
-- **Policy ops**: edit `policies/*.yaml` → `curl -X POST localhost:9559/policies/reload` — zero downtime.
-- **Tenant isolation**: per-tenant policies, audit DBs, engines and alert dispatchers; a rogue tenant header can never touch another tenant's data.
+- **Docker**: multi-arch (`amd64` + `arm64`), non-root user, `tini`, healthcheck
+- **Hardened**: CSP, HSTS, nosniff, 1MB body cap, per-IP rate limit, SSRF guard, PII log scrubbing
+- **Fail closed**: `NODE_ENV=production` + no admin token → admin routes refuse (503)
+- **Zero native deps**: uses Node's built-in `node:sqlite` — no compilation needed
+- **Hot-reload**: `curl -X POST localhost:9559/policies/reload` — zero downtime
 
 ---
 
-## Examples (`examples/`)
+## CLI
+
+```bash
+npx agentguard init my-project --template gdpr    # scaffold a project
+npx agentguard serve --policy ./policies/agentguard.yaml  # start sidecar
+npx agentguard validate policies/*.yaml           # lint policy
+npx agentguard doctor                             # pre-flight check
+npx agentguard audit-verify ./data/audit.sqlite   # verify hash chain
+npx agentguard export-audit ./data/audit.sqlite   # compliance export
+npx agentguard mcp                                # run as MCP server
+```
+
+---
+
+## Examples
 
 | Example | Shows |
-|---|---|
-| [`basic-agent`](examples/basic-agent) | One agent, filesystem + email, starter policy · `npm run smoke` |
-| [`multi-agent-crew`](examples/multi-agent-crew) | Coordinator + specialists, per-role decision matrix · `npm run smoke` |
-| [`deterministic-crew`](examples/deterministic-crew) | No-LLM crew handoff: coordinator → researcher → writer → reviewer · `npm run smoke` |
-| [`custom-policy`](examples/custom-policy) | Hand-written rules + hot-reload + chain verify · `npm run smoke` |
+|---------|-------|
+| [`basic-agent`](examples/basic-agent) | One agent, filesystem + email, starter policy |
+| [`multi-agent-crew`](examples/multi-agent-crew) | Coordinator + specialists, per-role RBAC matrix |
+| [`deterministic-crew`](examples/deterministic-crew) | No-LLM crew handoff (reproducible) |
+| [`custom-policy`](examples/custom-policy) | Custom rules + hot-reload + chain verify |
 
-```bash
-npm install && npm run build
-npx agentguard serve --policy examples/basic-agent/policies/agentguard.yaml
-(cd examples/basic-agent && npm run smoke)
+---
+
+## Project Structure
+
+```
+packages/core      wrapMCP() interceptor + policy client
+packages/sidecar    Policy engine, audit chain, alerts, WebSocket, multi-tenant
+packages/dashboard  React UI — live feed, audit chain, policies, agents
+packages/cli        init · serve · validate · audit-verify · doctor · export-audit · mcp
+policies/           Default policy (hot-reloadable YAML)
+demo/               Demo MCP servers + 7-scenario multi-agent demo
+examples/           Example projects with smoke tests
+docs/               Documentation
 ```
 
-## Packages
-
-| Path | Role |
-|---|---|
-| `packages/core` | `wrapMCP()` interceptor + typed policy client (`mcpId`, `failClosed`, redaction substitution) |
-| `packages/sidecar` | Policy engine, multi-tenant manager, audit chain, alerts, WebSocket |
-| `packages/dashboard` | React UI — live feed, audit chain, policies, agents, tenant switcher |
-| `packages/cli` | `init` · `serve` · `validate` · `audit-verify` · `templates` · `doctor` · `export-audit` · `mcp` |
-| `policies/agentguard.yaml` | Default policy (hot-reloadable) |
-| `demo/` | Demo MCP servers + 7-scenario multi-agent demo |
-
-### Demo MCP servers (`demo/mcp-*`)
-
-| Server | Transport | Tools |
-|---|---|---|
-| `mcp-filesystem` | stdio | `read_file`, `write_file`, `delete_file` (sandboxed) |
-| `mcp-email` | stdio | `send` (email simulation) |
-| `mcp-github` | stdio | `list_repos`, `create_issue`, `merge_pull_request` |
-| `mcp-database` | stdio | `query` (SELECT), `execute` (DML) |
-| `mcp-slack` | stdio | `send_message`, `list_channels` (stub) |
-| `mcp-http` | HTTP (`/mcp`) | `http_get`, `http_post` (remote MCP demo) |
-
-### Demo prerequisites
-
-The multi-agent demo (`demo/run.ts`) uses a local LLM for orchestration:
-
-```bash
-# 1. Start a local LLM (llama-server with qwen2.5-1.5b)
-llama-server -m qwen2.5-1.5b-instruct-q4_k_m.gguf --port 8080
-
-# 2. Start the AgentGuard sidecar
-npm run dev:sidecar
-
-# 3. Run the demo (7 scenarios across 4 orchestration patterns)
-npm run demo
-```
-
-For a no-LLM check, use the deterministic crew smoke test:
-
-```bash
-npx agentguard serve --policy ./policies/agentguard.yaml
-(cd examples/deterministic-crew && npm run smoke)
-```
+---
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/POLICY-LANGUAGE.md`](docs/POLICY-LANGUAGE.md) · [`docs/AUDIT-CHAIN.md`](docs/AUDIT-CHAIN.md) · [`docs/DEMO.md`](docs/DEMO.md) · [`docs/DESIGN-SYSTEM.md`](docs/DESIGN-SYSTEM.md)
+- [Architecture](docs/ARCHITECTURE.md) — system design and data flow
+- [Policy Language](docs/POLICY-LANGUAGE.md) — rule types and conditions
+- [Audit Chain](docs/AUDIT-CHAIN.md) — SHA-256 hash chain verification
+- [Hackathon](docs/HACKATHON.md) — problem, solution, and technology used
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Agent SDK | `@volcano.dev/agent` v1.2.0 (Volcano ADK) |
+| Policy Engine | Node.js + Fastify |
+| Audit Store | `node:sqlite` (built-in, zero native deps) |
+| Dashboard | React 18 + Vite + TailwindCSS |
+| Observability | OpenTelemetry |
+| Container | Docker multi-arch (`linux/amd64` + `linux/arm64`) |
+
+---
 
 ## License
 
