@@ -48,6 +48,11 @@ docs/DEMO.md
 docs/DESIGN-SYSTEM.md
 docs/laravel-boost-guidelines.md
 scripts/generate_tts.py
+scripts/record_demo.py
+
+# demo video — too large for git, upload to Devpost separately
+demo_video.mp4
+*.mp4
 
 # GitHub Actions — intentionally omitted (no CI/CD for this submission)
 .github/workflows/
