@@ -1,19 +1,63 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" fill="none">
   <defs>
-    <filter id="ds" x="-10%" y="-10%" width="120%" height="120%">
-      <feDropShadow dx="0" dy="6" stdDeviation="12" flood-opacity="0.3"/>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ff4757"/>
+      <stop offset="40%" stop-color="#E63946"/>
+      <stop offset="100%" stop-color="#a40e1b"/>
+    </linearGradient>
+    <linearGradient id="volcano" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="60%" stop-color="#f1faee"/>
+      <stop offset="100%" stop-color="#a8dadc"/>
+    </linearGradient>
+    <radialGradient id="lava" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0%" stop-color="#fff3b0"/>
+      <stop offset="40%" stop-color="#ffb74d"/>
+      <stop offset="100%" stop-color="#ff6b35"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.6">
+      <stop offset="0%" stop-color="#ff6b35" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#ff6b35" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="ds" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-opacity="0.35"/>
+    </filter>
+    <filter id="innerGlow">
+      <feGaussianBlur stdDeviation="2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
     </filter>
   </defs>
-  <g filter="url(#ds)" transform="translate(256,240) scale(13)">
-    <path d="M16 2L4 7v9c0 7.18 4.94 13.9 12 14.5 7.06-.6 12-7.32 12-14.5V7L16 2z" fill="#E63946" transform="translate(-16,-16)"/>
-    <path d="M16 8.5l-3.2 6.4h1.6l-2.4 4.8h3.2l-2 4h5.6l-2-4h3.2l-2.4-4.8h1.6L16 8.5z" fill="#fff" transform="translate(-16,-16)"/>
-    <circle cx="13" cy="22.5" fill="#fff" r="0.9" transform="translate(-16,-16)"/>
-    <circle cx="19" cy="22.5" fill="#fff" r="0.9" transform="translate(-16,-16)"/>
-    <circle cx="16" cy="24" fill="#fff" r="0.9" transform="translate(-16,-16)"/>
+
+  <ellipse cx="256" cy="300" rx="160" ry="20" fill="url(#glow)"/>
+
+  <g filter="url(#ds)">
+    <path d="M256 60 L120 110 L120 240 C120 335 175 395 256 415 C337 395 392 335 392 240 L392 110 Z"
+          fill="url(#shield)"/>
   </g>
-  <text x="256" y="465" text-anchor="middle"
+
+  <path d="M256 60 L120 110 L120 240 C120 335 175 395 256 415 C337 395 392 335 392 240 L392 110 Z"
+        fill="none" stroke="#fff" stroke-width="2" stroke-opacity="0.2"/>
+
+  <path d="M256 60 L120 110 L120 240 C120 335 175 395 256 415 C337 395 392 335 392 240 L392 110 Z"
+        fill="none" stroke="#ff4757" stroke-width="1" stroke-opacity="0.5"/>
+
+  <g transform="translate(256, 215)">
+    <path d="M0 -85 L-42 -10 L-22 -10 L-32 20 L-10 20 L-18 42 L18 42 L10 20 L32 20 L22 -10 L42 -10 Z"
+          fill="url(#volcano)" filter="url(#innerGlow)"/>
+  </g>
+
+  <g transform="translate(256, 215)">
+    <circle cx="-28" cy="55" r="8" fill="url(#lava)"/>
+    <circle cx="28" cy="55" r="8" fill="url(#lava)"/>
+    <circle cx="0" cy="72" r="10" fill="url(#lava)"/>
+    <circle cx="0" cy="72" r="4" fill="#fff3b0" opacity="0.9"/>
+    <circle cx="-28" cy="55" r="3" fill="#fff3b0" opacity="0.8"/>
+    <circle cx="28" cy="55" r="3" fill="#fff3b0" opacity="0.8"/>
+  </g>
+
+  <text x="256" y="470" text-anchor="middle"
         font-family="system-ui, -apple-system, Segoe UI, sans-serif"
-        font-size="36" font-weight="700" fill="#E63946" letter-spacing="2">
+        font-size="38" font-weight="800" fill="#E63946" letter-spacing="3">
     AgentGuard
   </text>
 </svg>
