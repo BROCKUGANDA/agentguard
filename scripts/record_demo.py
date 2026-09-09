@@ -251,48 +251,63 @@ async def click_by_text(page, needle: str) -> bool:
 
 
 async def act_for_section(page, idx: int) -> None:
+    """Navigate the dashboard for narration section `idx` (0-based)."""
     if idx == 3:
-        entries = await page.query_selector_all(".cursor-pointer")
+        # Dashboard: open first live-feed row modal
+        entries = await page.query_selector_all("li.cursor-pointer")
+        if not entries:
+            entries = await page.query_selector_all(".cursor-pointer")
         if entries:
             try:
-                await entries[0].click(timeout=2000)
-                await asyncio.sleep(1.2)
+                await entries[0].click(timeout=2500)
+                await asyncio.sleep(1.4)
             except Exception:
                 pass
     elif idx == 4:
+        # Agents
         await page.keyboard.press("Escape")
-        await asyncio.sleep(0.4)
-        await click_if_exists(page, 'a[href="/agents"]')
-        await asyncio.sleep(1.0)
-        cards = await page.query_selector_all(".cursor-pointer")
-        if len(cards) > 1:
+        await asyncio.sleep(0.3)
+        await click_if_exists(page, 'nav a[href="/agents"]')
+        await page.wait_for_timeout(1200)
+        # Open an agent detail card (button wrappers around cards)
+        cards = await page.query_selector_all("main button.cursor-pointer, main button")
+        for c in cards[1:3] if len(cards) > 1 else cards:
             try:
-                await cards[1].click(timeout=2000)
-                await asyncio.sleep(1.0)
+                await c.click(timeout=1500)
+                await asyncio.sleep(0.8)
+                break
             except Exception:
-                pass
+                continue
     elif idx == 5:
+        # Audit list
         await page.keyboard.press("Escape")
-        await asyncio.sleep(0.4)
-        await click_if_exists(page, 'a[href="/audit"]')
-        await asyncio.sleep(1.0)
+        await asyncio.sleep(0.3)
+        await click_if_exists(page, 'nav a[href="/audit"]')
+        await page.wait_for_timeout(1200)
     elif idx == 6:
-        await click_if_exists(page, 'a[href="/policies"]')
-        await asyncio.sleep(0.8)
+        # Policies
+        await click_if_exists(page, 'nav a[href="/policies"]')
+        await page.wait_for_timeout(1000)
     elif idx == 7:
-        await click_if_exists(page, 'a[href="/audit"]')
-        await asyncio.sleep(0.8)
-        await click_by_text(page, "verify")
-        await asyncio.sleep(1.2)
+        # Back to Audit + Verify chain
+        await click_if_exists(page, 'nav a[href="/audit"]')
+        await page.wait_for_timeout(900)
+        await click_by_text(page, "Verify chain")
+        await page.wait_for_timeout(1600)
     elif idx == 8:
-        await click_if_exists(page, 'a[href="/"]')
-        await asyncio.sleep(0.6)
+        # Agents again for multi-agent narration
+        await click_if_exists(page, 'nav a[href="/agents"]')
+        await page.wait_for_timeout(900)
     elif idx == 9:
-        await click_if_exists(page, 'a[href="/settings"]')
-        await asyncio.sleep(0.6)
+        # Alerts (production / alerting story)
+        await click_if_exists(page, 'nav a[href="/alerts"]')
+        await page.wait_for_timeout(900)
     elif idx == 10:
-        await click_if_exists(page, 'a[href="/"]')
-        await asyncio.sleep(0.5)
+        # Settings then home for the close
+        await click_if_exists(page, 'nav a[href="/settings"]')
+        await page.wait_for_timeout(900)
+        await click_if_exists(page, 'nav a[href="/"]')
+        await page.wait_for_timeout(600)
 
 
 async def record(sections: list[tuple[Path, float]]) -> Path:

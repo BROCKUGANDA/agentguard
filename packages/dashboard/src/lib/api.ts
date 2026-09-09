@@ -110,11 +110,14 @@ async function request<T>(path: string, init?: RequestInit, timeoutMs = 4000): P
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const token = getAdminToken();
   try {
+    const hasBody = init?.body !== undefined && init?.body !== null && init?.body !== '';
     const res = await fetch(url, {
       ...init,
       signal: controller.signal,
       headers: {
-        'Content-Type': 'application/json',
+        // Only send Content-Type when there is a body. Fastify rejects
+        // empty POSTs that claim application/json with 415.
+        ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
         'X-Tenant-Id': getTenantId(),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...(init?.headers ?? {}),
@@ -161,8 +164,22 @@ export interface AuditPage {
 
 export async function getAuditPage(limit = 50, cursor?: number): Promise<AuditPage> {
   const params = new URLSearchParams({ limit: String(limit) });
-  if (cursor !== undefined) params.set('cursor', String(cursor));
-  return request<AuditPage>(`/audit/recent?${params.toString()}`);
+  // Always send `cursor` so the sidecar returns the paginated envelope
+  // ({ items, nextCursor, total }). Omitting it yields a bare array, which
+  // used to make `page.items` undefined and crash AuditLogViewer.
+  params.set('cursor', cursor != null && Number.isFinite(cursor) ? String(cursor) : '');
+  const raw = await request<unknown>(`/audit/recent?${params.toString()}`);
+  if (Array.isArray(raw)) {
+    // Defensive: older sidecars / bare-array fallback.
+    const items = raw as AuditEntry[];
+    return { items, nextCursor: null, total: items.length };
+  }
+  const page = raw as AuditPage;
+  return {
+    items: Array.isArray(page.items) ? page.items : [],
+    nextCursor: page.nextCursor ?? null,
+    total: typeof page.total === 'number' ? page.total : (page.items?.length ?? 0),
+  };
 }
 
 export async function getAuditByAgent(agentId: string, since?: string): Promise<AuditEntry[]> {

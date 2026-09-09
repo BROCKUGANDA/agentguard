@@ -41,11 +41,20 @@ export function AuditChainView({ limit = 8 }: AuditChainViewProps): JSX.Element 
   });
 
   const verifyMut = useMutation<ChainIntegrity>({
-    mutationFn: () => verifyAudit().catch(() => ({
-      verified: true,
-      totalEntries: data?.length ?? 0,
-      lastVerifiedAt: new Date().toISOString(),
-    })),
+    // Fail soft: auth-gated /verify (401/503 without admin token) should not
+    // blank the chain view during demos — surface the local hash-link check.
+    mutationFn: () =>
+      verifyAudit().catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          verified: null as boolean | null,
+          totalEntries: data?.length ?? 0,
+          lastVerifiedAt: new Date().toISOString(),
+          // Keep the UI honest that we couldn't reach the verifier.
+          brokenAt: undefined as string | undefined,
+          error: message,
+        };
+      }),
     onSuccess: (result) => {
       if (data) {
         const local = verifyChain(data);
@@ -141,20 +150,27 @@ export function AuditChainView({ limit = 8 }: AuditChainViewProps): JSX.Element 
       <footer className="mt-md pt-md border-t border-border flex items-center justify-between text-xs">
         {verifyMut.data ? (
           <span className="flex items-center gap-1.5">
-            {verifyMut.data.verified ? (
+            {verifyMut.data.verified === true ? (
               <>
                 <ShieldCheck size={14} className="text-success" />
                 <span className="text-success">chain verified</span>
               </>
-            ) : (
+            ) : verifyMut.data.verified === false ? (
               <>
                 <ShieldAlert size={14} className="text-error" />
                 <span className="text-error">chain broken at {verifyMut.data.brokenAt ?? '—'}</span>
               </>
+            ) : (
+              <>
+                <ShieldAlert size={14} className="text-warning" />
+                <span className="text-warning">
+                  server verify unavailable — local links look ok
+                </span>
+              </>
             )}
           </span>
         ) : (
-          <span className="text-text-muted">click "Verify chain" to run integrity check</span>
+          <span className="text-text-muted">click &quot;Verify chain&quot; to run integrity check</span>
         )}
         <span className="font-mono text-text-muted">{entries.length} entries</span>
       </footer>

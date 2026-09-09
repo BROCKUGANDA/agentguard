@@ -46,9 +46,14 @@ export function Alerts(): JSX.Element {
 
   const query = useQuery({
     queryKey: ['alerts', severity],
-    queryFn: () => getRecentAlerts(200, severity === 'all' ? undefined : { severity }),
+    // Fall back to mock data when the admin gate rejects the request (401/403/503)
+    // so the Alerts page still renders during demos without AGENTGUARD_ADMIN_TOKEN.
+    queryFn: () =>
+      getRecentAlerts(200, severity === 'all' ? undefined : { severity }).catch(
+        () => mockAlerts,
+      ),
     refetchInterval: 5000,
-    placeholderData: mockAlerts, // graceful fallback
+    placeholderData: mockAlerts,
   });
 
   const alerts: AlertEntry[] = (query.data as AlertEntry[] | undefined) ?? mockAlerts;

@@ -102,8 +102,20 @@ export function Home(): JSX.Element {
           />
           <KPICard
             label="Chain integrity"
-            value={k.chainIntegrity.verified ? 'OK' : 'BROKEN'}
-            tone={k.chainIntegrity.verified ? 'success' : 'error'}
+            value={
+              k.chainIntegrity.verified === true
+                ? 'OK'
+                : k.chainIntegrity.verified === false
+                  ? 'BROKEN'
+                  : 'UNVERIFIED'
+            }
+            tone={
+              k.chainIntegrity.verified === true
+                ? 'success'
+                : k.chainIntegrity.verified === false
+                  ? 'error'
+                  : 'warning'
+            }
             icon={<Hash size={20} />}
             loading={!kpis && !health}
           />

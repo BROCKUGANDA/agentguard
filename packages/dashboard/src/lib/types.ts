@@ -50,10 +50,12 @@ export interface PolicySet {
 }
 
 export interface ChainIntegrity {
-  verified: boolean;
+  /** true = verified, false = broken, null = verifier unavailable (auth/offline). */
+  verified: boolean | null;
   totalEntries: number;
   lastVerifiedAt: string;
   brokenAt?: string;       // entry ID where the chain first broke
+  error?: string;          // why the server-side verifier could not run
 }
 
 export interface HealthInfo {

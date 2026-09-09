@@ -359,8 +359,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     );
     const cursorRaw = req.query.cursor;
     if (cursorRaw !== undefined) {
-      const cursor = Number.parseInt(cursorRaw, 10) || undefined;
-      const page = ctx.auditStore.recentPaginated(limit, cursor);
+      // `cursor=` (empty) or `cursor=0` = first page. Any positive int = before that id.
+      // Do NOT use `|| undefined` — that treats a legitimate `0` as missing and
+      // fell through to the flat-array response, breaking dashboard pagination.
+      const n = Number.parseInt(cursorRaw, 10);
+      const beforeId = Number.isFinite(n) && n > 0 ? n : undefined;
+      const page = ctx.auditStore.recentPaginated(limit, beforeId);
       return reply.send({
         items: page.items.map(toAuditEntry),
         nextCursor: page.nextCursor,

@@ -54,23 +54,29 @@ export function AuditLogViewer(): JSX.Element {
       staleTime: 3000,
     });
 
-  const flat: AuditEntry[] = useMemo(
-    () => data?.pages.flatMap((p) => p.items) ?? [],
-    [data],
-  );
+  const flat: AuditEntry[] = useMemo(() => {
+    if (!data?.pages) return [];
+    return data.pages.flatMap((p) => {
+      const items = Array.isArray(p?.items) ? p.items : [];
+      return items.filter((x): x is AuditEntry => Boolean(x && typeof x === 'object'));
+    });
+  }, [data]);
 
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     return flat.filter((e) => {
+      // Guard: a malformed page (flat array misread as { items }) used to
+      // inject `undefined` rows and crash the viewer.
+      if (!e || typeof e !== 'object') return false;
       if (severity !== 'all' && e.severity !== severity) return false;
       if (decision !== 'all' && e.decision !== decision) return false;
       if (!term) return true;
       return (
-        e.tool.toLowerCase().includes(term) ||
-        e.agentId.toLowerCase().includes(term) ||
+        (e.tool ?? '').toLowerCase().includes(term) ||
+        (e.agentId ?? '').toLowerCase().includes(term) ||
         (e.reason ?? '').toLowerCase().includes(term) ||
         (e.ruleId ?? '').toLowerCase().includes(term) ||
-        e.id.toLowerCase().includes(term)
+        String(e.id ?? '').toLowerCase().includes(term)
       );
     });
   }, [flat, severity, decision, search]);
