@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
-import { checkWebhookSsrf, IPRateLimiter } from '../src/hardening.js';
+import { checkWebhookSsrf, IPRateLimiter, scrubArgsForAudit, redactPII } from '../src/hardening.js';
 
 // Policy exercising the redact decision: emails with SSNs are MASKED and
 // allowed through, instead of blocked outright.
@@ -223,6 +223,57 @@ describe('Hardening + redact decisions', () => {
       expect(checkWebhookSsrf('https://hooks.slack.com/services/T0/B0/xxx')).toBeNull();
       expect(checkWebhookSsrf('https://1.2.3.4/hook')).toBeNull();
       expect(checkWebhookSsrf('https://example.com/webhook')).toBeNull();
+    });
+  });
+
+  describe('PII scrubbing for audit', () => {
+    it('scrubs nested strings in args objects', () => {
+      const scrubbed = scrubArgsForAudit({
+        to: 'hr@x.com',
+        nested: { body: 'ssn 123-45-6789 and token sk-abcdefghijklmnopqrstuvwx' },
+        list: ['user@example.com'],
+        n: 42,
+      }) as Record<string, unknown>;
+      expect(JSON.stringify(scrubbed)).not.toContain('123-45-6789');
+      expect(JSON.stringify(scrubbed)).not.toContain('user@example.com');
+      expect(JSON.stringify(scrubbed)).not.toContain('sk-abcdefghijklmnopqrstuvwx');
+      expect((scrubbed as { n: number }).n).toBe(42);
+    });
+
+    it('credit-card pattern does not hang on long digit runs', () => {
+      const start = Date.now();
+      redactPII('x'.repeat(100) + ' '.repeat(100) + '9'.repeat(50_000));
+      expect(Date.now() - start).toBeLessThan(500);
+    });
+  });
+
+  describe('deny path stores scrubbed args', () => {
+    it('does not persist raw SSN on deny decisions', async () => {
+      await app.inject({
+        method: 'POST',
+        url: '/check',
+        payload: {
+          agentId: 'guest-bot',
+          role: 'guest',
+          tool: 'email.send',
+          args: { subject: 'ssn 111-22-3333', body: 'contact me@evil.test' },
+        },
+      });
+      const recent = await app.inject({ method: 'GET', url: '/audit/recent?limit=5' });
+      const rows = recent.json() as Array<{ args: Record<string, unknown>; decision: string }>;
+      const denyRows = rows.filter((r) => r.decision === 'deny');
+      expect(denyRows.length).toBeGreaterThan(0);
+      const dumped = JSON.stringify(denyRows);
+      expect(dumped).not.toContain('111-22-3333');
+      expect(dumped).not.toContain('contact me@evil.test');
+    });
+  });
+
+  describe('IP rate limiter bucket cap', () => {
+    it('caps map size under flood', () => {
+      const limiter = new IPRateLimiter(10, 60_000, 5);
+      for (let i = 0; i < 20; i++) limiter.hit(`ip-${i}`);
+      expect(limiter.size).toBeLessThanOrEqual(5);
     });
   });
 });

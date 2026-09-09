@@ -18,10 +18,14 @@ services:
       - "5173:5173"   # dashboard (web UI)
     environment:
       NODE_ENV: production
+      NODE_OPTIONS: --experimental-sqlite
       AGENTGUARD_BIND_ALL: "1"
       AGENTGUARD_POLICY_FILE: /policies/agentguard.yaml
       AGENTGUARD_TENANT_DATA_DIR: /data
       AGENTGUARD_TENANT_POLICY_DIR: /policies
+      # Required in production: gates admin routes (verify/reload/alerts).
+      # Generate with: openssl rand -base64 32
+      AGENTGUARD_ADMIN_TOKEN: ${AGENTGUARD_ADMIN_TOKEN:?AGENTGUARD_ADMIN_TOKEN is required — set it in .env}
       # Webhook for critical alert delivery (optional)
       AGENTGUARD_SLACK_WEBHOOK: ${AGENTGUARD_SLACK_WEBHOOK:-}
       # OpenTelemetry export (optional)

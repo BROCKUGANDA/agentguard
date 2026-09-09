@@ -11,6 +11,8 @@ import type { RateLimitConfig } from '../schema.js';
  * Single-process only — adequate for the sidecar's single-instance deploy.
  * For a clustered sidecar, swap to a Redis backend.
  */
+const MAX_KEYS = 50_000;
+
 export class RateLimiter {
   private readonly hits = new Map<string, number[]>();
 
@@ -37,6 +39,12 @@ export class RateLimiter {
     }
 
     live.push(now);
+    // Refresh insertion order for approximate LRU; evict oldest under flood.
+    this.hits.delete(key);
+    if (this.hits.size >= MAX_KEYS) {
+      const oldest = this.hits.keys().next().value;
+      if (oldest !== undefined) this.hits.delete(oldest);
+    }
     this.hits.set(key, live);
     return true;
   }
@@ -44,6 +52,11 @@ export class RateLimiter {
   /** Drop all counters (test/reload convenience). */
   reset(): void {
     this.hits.clear();
+  }
+
+  /** Current key count (for tests / metrics). */
+  get size(): number {
+    return this.hits.size;
   }
 
   /** Compose a namespaced key from the rule's scope. */

@@ -16,14 +16,46 @@ agents:
     role: guest
 
 rules:
-  - id: rbac-read-allow
-    description: "All roles can read/write files outside /secrets"
+  # Order matters (first-match wins): deny secrets + guest writes first,
+  # then allow scoped developer/admin/reader actions.
+  - id: deny-secrets-path
+    description: "No role may read paths matching *secret*"
     match:
-      tool: ["filesystem.read_file", "filesystem.write_file", "filesystem.delete_file"]
+      tool: "filesystem.read_file"
+      args:
+        path: "*secret*"
+    decision: deny
+    reason: "starter policy: /secrets is denied"
+
+  - id: deny-destructive-for-guests
+    description: "guest cannot write or delete files"
+    match:
+      tool: ["filesystem.write_file", "filesystem.delete_file"]
+    decision: deny
+    reason: "starter policy: guest cannot write or delete"
+    conditions:
+      rbac:
+        role: guest
+        action: deny
+
+  - id: rbac-read-allow
+    description: "developer/admin/reader can read files"
+    match:
+      tool: "filesystem.read_file"
     decision: allow
     conditions:
       rbac:
-        role: [guest, developer, admin, reader]
+        role: [developer, admin, reader]
+        action: allow
+
+  - id: rbac-write-allow
+    description: "developer/admin can write files"
+    match:
+      tool: "filesystem.write_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
         action: allow
 
   - id: pii-block

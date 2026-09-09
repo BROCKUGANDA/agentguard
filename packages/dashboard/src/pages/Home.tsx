@@ -1,36 +1,49 @@
 import { useQuery } from '@tanstack/react-query';
-import { ShieldCheck, ShieldAlert, Clock, Activity, Users, Hash } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Clock, Activity, Users, Hash, AlertTriangle } from 'lucide-react';
 import { Header } from '../components/layout/Header';
 import { KPICard } from '../components/dashboard/KPICard';
 import { LiveFeed } from '../components/dashboard/LiveFeed';
 import { AuditChainView } from '../components/dashboard/AuditChainView';
 import { Card } from '../components/ui/Card';
 import { Skeleton } from '../components/ui/Skeleton';
-import { getHealth, getKpis, getAgents, mockHealth, mockKpis, mockAgents } from '../lib/api';
+import { getHealth, getKpis, getAgents, getSidecarStatus, mockHealth, mockKpis, mockAgents } from '../lib/api';
 import type { HealthInfo, KpiSummary, AgentStatus } from '../lib/types';
-import { useEffect, useReducer } from 'react';
+import { useEffect, useReducer, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getStreamState, subscribeStream } from '../lib/ws';
 
 export function Home(): JSX.Element {
   const navigate = useNavigate();
+  const [usingMock, setUsingMock] = useState(false);
   const { data: health } = useQuery<HealthInfo>({
     queryKey: ['health'],
-    queryFn: () => getHealth().catch(() => mockHealth),
+    queryFn: () =>
+      getHealth().catch(() => {
+        setUsingMock(true);
+        return mockHealth;
+      }),
     refetchInterval: 10_000,
     staleTime: 5000,
   });
 
   const { data: kpis } = useQuery<KpiSummary>({
     queryKey: ['kpis'],
-    queryFn: () => getKpis().catch(() => mockKpis),
+    queryFn: () =>
+      getKpis().catch(() => {
+        setUsingMock(true);
+        return mockKpis;
+      }),
     refetchInterval: 6000,
     staleTime: 3000,
   });
 
   const { data: agents } = useQuery<AgentStatus[]>({
     queryKey: ['agents'],
-    queryFn: () => getAgents().catch(() => mockAgents),
+    queryFn: () =>
+      getAgents().catch(() => {
+        setUsingMock(true);
+        return mockAgents;
+      }),
     refetchInterval: 5000,
     staleTime: 3000,
   });
@@ -39,8 +52,11 @@ export function Home(): JSX.Element {
   useEffect(() => subscribeStream(forceUpdate), []);
   const stream = getStreamState();
 
+  // Prefer real data when the sidecar is reachable; only fall back to mocks
+  // for initial render so the layout doesn't jump.
   const h = health ?? mockHealth;
   const k = kpis ?? mockKpis;
+  const showMockBanner = usingMock && !getSidecarStatus().reachable;
 
   return (
     <div className="ag-page-enter">
@@ -50,6 +66,15 @@ export function Home(): JSX.Element {
       />
 
       <main className="p-lg space-y-lg">
+        {showMockBanner && (
+          <div
+            role="status"
+            className="flex items-center gap-sm rounded-md border border-warning/40 bg-warning/10 text-warning-foreground px-md py-sm text-sm"
+          >
+            <AlertTriangle size={16} className="text-warning shrink-0" />
+            Sidecar is unreachable — KPIs below are sample data, not live traffic.
+          </div>
+        )}
         <section
           aria-label="Key Performance Indicators"
           className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-md"

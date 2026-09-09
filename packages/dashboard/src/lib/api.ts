@@ -63,6 +63,18 @@ export function setAdminToken(token: string): void {
 }
 
 function baseUrl(): string {
+  // Settings page can override the sidecar base URL (persisted in localStorage).
+  try {
+    const raw = localStorage.getItem('agentguard.preferences');
+    if (raw) {
+      const prefs = JSON.parse(raw) as { sidecarUrl?: string };
+      if (prefs.sidecarUrl && prefs.sidecarUrl.trim().length > 0) {
+        return prefs.sidecarUrl.trim().replace(/\/$/, '');
+      }
+    }
+  } catch {
+    /* fall through to env/default */
+  }
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
   const v = env?.VITE_SIDECAR_URL;
   if (v && v.length > 0) return v.replace(/\/$/, '');

@@ -35,6 +35,7 @@ import {
  * expensive under load.
  */
 const globRegexCache = new Map<string, RegExp>();
+const GLOB_CACHE_MAX = 2_000;
 function globMatch(value: string, pattern: string): boolean {
   if (!pattern.includes('*')) return value === pattern;
   let re = globRegexCache.get(pattern);
@@ -44,6 +45,11 @@ function globMatch(value: string, pattern: string): boolean {
       .replace(/[.+^${}()|[\]\\]/g, '\\$&')
       .replace(/\*/g, '.*');
     re = new RegExp(`^${escaped}$`);
+    if (globRegexCache.size >= GLOB_CACHE_MAX) {
+      // Evict oldest entry to keep the cache bounded under attacker-chosen patterns.
+      const oldest = globRegexCache.keys().next().value;
+      if (oldest !== undefined) globRegexCache.delete(oldest);
+    }
     globRegexCache.set(pattern, re);
   }
   return re.test(value);
