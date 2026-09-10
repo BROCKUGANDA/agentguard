@@ -231,6 +231,37 @@ describe('PolicyEngine', () => {
     expect(b).toBe('allow');
   });
 
+  it('Time window: midnight-wrap span still matches after midnight for the start weekday', async () => {
+    const { evaluateTimeWindow } = await import('../src/policy/rules/time-window.js');
+    // Fri 2025-06-06 22:00 → Sat 00:30 is still inside Fri 22:00–06:00.
+    const sat0030 = new Date('2025-06-07T00:30:00Z');
+    const v = evaluateTimeWindow(
+      {
+        tz: 'UTC',
+        allow: [{ start: '22:00', end: '06:00', weekdays: ['fri'] }],
+        invert: false,
+      },
+      sat0030
+    );
+    expect(v).toBe('allow');
+    // And Fri 23:00 is before midnight → also inside.
+    const fri2300 = new Date('2025-06-06T23:00:00Z');
+    expect(
+      evaluateTimeWindow(
+        { tz: 'UTC', allow: [{ start: '22:00', end: '06:00', weekdays: ['fri'] }], invert: false },
+        fri2300
+      )
+    ).toBe('allow');
+    // Sat afternoon is outside the Fri window.
+    const sat1200 = new Date('2025-06-07T12:00:00Z');
+    expect(
+      evaluateTimeWindow(
+        { tz: 'UTC', allow: [{ start: '22:00', end: '06:00', weekdays: ['fri'] }], invert: false },
+        sat1200
+      )
+    ).toBe('deny');
+  });
+
   it('Data classification: matches SSN in subject', async () => {
     const d = await engine.check({
       agentId: 'mailer',

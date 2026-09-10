@@ -56,6 +56,7 @@ RUN printf '{"name":"agentguard-app","private":true,"type":"module"}\n' > ./pack
 USER agentguard
 
 ENV NODE_ENV=production \
+    NODE_OPTIONS=--experimental-sqlite \
     AGENTGUARD_PORT=9559 \
     AGENTGUARD_DASHBOARD_PORT=5173 \
     AGENTGUARD_BIND_ALL=1 \

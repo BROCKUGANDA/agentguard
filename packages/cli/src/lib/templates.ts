@@ -19,16 +19,46 @@ agents:
     role: guest
 
 rules:
-  - id: rbac-read-allow
-    description: "All roles can read files outside /secrets"
+  # Guests/readers may only read (never write/delete). Developers/admin may write.
+  - id: deny-destructive-for-guests
+    description: "guest/reader cannot write or delete files"
     match:
-      tool: ["filesystem.read_file", "filesystem.write_file", "filesystem.delete_file"]
+      tool: ["filesystem.write_file", "filesystem.delete_file"]
+    decision: deny
+    reason: "guest/reader role cannot write or delete files"
+    conditions:
+      rbac:
+        role: [guest, reader]
+        action: deny
+
+  - id: deny-secrets
+    description: "No role may read paths matching *secret* without an explicit allow above"
+    match:
+      tool: "filesystem.read_file"
+      args:
+        path: "*secret*"
+    decision: deny
+    reason: "secrets path denied"
+
+  - id: rbac-read-allow
+    description: "developer/admin/reader can read files"
+    match:
+      tool: "filesystem.read_file"
     decision: allow
     conditions:
       rbac:
-        role: [guest, developer, admin, reader]
+        role: [developer, admin, reader]
         action: allow
-        # path: "*secrets*"   # uncomment to add path constraint
+
+  - id: rbac-write-allow
+    description: "developer/admin can write files"
+    match:
+      tool: "filesystem.write_file"
+    decision: allow
+    conditions:
+      rbac:
+        role: [developer, admin]
+        action: allow
 
   - id: pii-block
     description: "Block tool calls containing PII"

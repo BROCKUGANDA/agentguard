@@ -97,19 +97,33 @@ export function evaluateTimeWindow(
   const today = clk.weekday;
 
   const insideAny = cond.allow.some((span) => {
-    if (span.weekdays && span.weekdays.length > 0 && !span.weekdays.includes(today)) {
-      return false;
-    }
     const startMin = parseHHMM(span.start).h * 60 + parseHHMM(span.start).m;
     const endMin = parseHHMM(span.end).h * 60 + parseHHMM(span.end).m;
     if (startMin === endMin) {
       // Degenerate empty window — treat as never-inside.
       return false;
     }
+
     if (startMin < endMin) {
+      // Same-day window — weekday must match today.
+      if (span.weekdays && span.weekdays.length > 0 && !span.weekdays.includes(today)) {
+        return false;
+      }
       return nowMinutes >= startMin && nowMinutes < endMin;
     }
-    // Window wraps midnight: e.g. 22:00 → 06:00.
+
+    // Window wraps midnight: e.g. Fri 22:00 → Sat 06:00 with weekdays:[fri].
+    // Evening (>= startMin) belongs to today's weekday; early morning
+    // (< endMin) belongs to yesterday's weekday. Mid-day (endMin..startMin)
+    // is outside the window entirely.
+    if (span.weekdays && span.weekdays.length > 0) {
+      const yesterday = WEEKDAYS[(WEEKDAYS.indexOf(today) + 6) % 7];
+      const startOk = span.weekdays.includes(today);
+      const endOk = span.weekdays.includes(yesterday);
+      if (nowMinutes >= startMin) return startOk;
+      if (nowMinutes < endMin) return endOk;
+      return false;
+    }
     return nowMinutes >= startMin || nowMinutes < endMin;
   });
 

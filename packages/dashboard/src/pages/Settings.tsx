@@ -289,6 +289,7 @@ export function Settings(): JSX.Element {
                 {tenants.map((t) => (
                   <button
                     key={t.id}
+                    type="button"
                     onClick={() => switchTenant(t.id)}
                     className={`px-sm py-xs rounded-md border text-xs transition-colors ${
                       t.id === tenantId
@@ -311,7 +312,7 @@ export function Settings(): JSX.Element {
           <SectionTitle icon={Eye}>Appearance</SectionTitle>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-md">
             <Field label="Theme">
-              <div className="flex gap-sm">
+              <div className="flex gap-sm" role="group" aria-label="Theme">
                 <ThemeButton active={prefs.theme === 'auto'} onClick={() => update('theme', 'auto')}>
                   <SettingsIcon size={14} className="mr-1" /> Auto
                 </ThemeButton>
@@ -457,6 +458,8 @@ function ThemeButton({
 }): JSX.Element {
   return (
     <button
+      type="button"
+      aria-pressed={active}
       onClick={onClick}
       className={`flex items-center px-md py-sm rounded-md text-sm transition-colors ${
         active ? 'bg-primary text-white' : 'bg-bg text-text-muted hover:text-text border border-border'

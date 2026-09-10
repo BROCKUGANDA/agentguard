@@ -68,6 +68,15 @@ export class HttpPolicyClient implements PolicyClient {
   private closed = false;
 
   constructor(opts: HttpPolicyClientOptions) {
+    if (typeof opts.sidecarUrl !== 'string' || opts.sidecarUrl.trim().length === 0) {
+      throw new AgentGuardUnreachableError('sidecarUrl is required');
+    }
+    try {
+      // Reject garbage early so a bad config fails at construction, not mid-flight.
+      new URL(opts.sidecarUrl);
+    } catch {
+      throw new AgentGuardUnreachableError(`invalid sidecarUrl: ${opts.sidecarUrl}`);
+    }
     this.sidecarUrl = opts.sidecarUrl.replace(/\/+$/, '');
     this.timeoutMs = opts.timeoutMs ?? 1000;
     this.failClosed = opts.failClosed;
@@ -105,9 +114,35 @@ export class HttpPolicyClient implements PolicyClient {
         res.status,
       );
     }
+    // Cap response size so a compromised/malicious sidecar can't OOM the agent.
+    const contentLength = Number(res.headers.get('content-length') ?? '0');
+    if (contentLength > 2 * 1024 * 1024) {
+      return this.handleUnreachable(
+        `AgentGuard sidecar response too large (${contentLength} bytes)`,
+        new Error('response too large'),
+        res.status,
+      );
+    }
+    let text: string;
+    try {
+      text = await res.text();
+    } catch (err) {
+      return this.handleUnreachable(
+        'AgentGuard sidecar returned unreadable body',
+        err,
+        res.status,
+      );
+    }
+    if (text.length > 2 * 1024 * 1024) {
+      return this.handleUnreachable(
+        `AgentGuard sidecar response too large (${text.length} bytes)`,
+        new Error('response too large'),
+        res.status,
+      );
+    }
     let json: unknown;
     try {
-      json = await res.json();
+      json = text.length === 0 ? {} : JSON.parse(text);
     } catch (err) {
       return this.handleUnreachable(
         'AgentGuard sidecar returned invalid JSON',

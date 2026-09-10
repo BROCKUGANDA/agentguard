@@ -21,7 +21,7 @@
 
 import {
   AgentGuardBlockedError,
-
+  AgentGuardUnreachableError,
 } from './errors.js';
 import { createHttpPolicyClient } from './policy-client.js';
 import type {
@@ -45,6 +45,13 @@ interface CallResult {
  * default HTTP client is constructed from `sidecarUrl` + `failClosed`.
  */
 export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
+  if (!opts.client) {
+    if (typeof opts.sidecarUrl !== 'string' || opts.sidecarUrl.trim().length === 0) {
+      throw new AgentGuardUnreachableError(
+        'wrapMCP requires a non-empty sidecarUrl when no client is injected',
+      );
+    }
+  }
   const client: PolicyClient =
     opts.client ??
     createHttpPolicyClient({
@@ -62,10 +69,17 @@ export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
   // ─── Automatic tool selection ───────────────────────────────────────────
   // When filterTools is enabled (default), listTools() is filtered so the
   // LLM only sees tools the agent's role is allowed to call. The filtered
-  // list is cached for 60s to avoid repeated /allowed-tools round-trips.
+  // list is cached briefly to avoid repeated /allowed-tools round-trips.
+  // Short TTL (15s) so policy reloads are reflected quickly; call-time
+  // policy is still the authoritative gate.
   const filterTools = opts.filterTools ?? true;
   let toolCache: { result: unknown; expiry: number } | null = null;
-  const TOOL_CACHE_TTL_MS = 60_000;
+  const TOOL_CACHE_TTL_MS = 15_000;
+  const emptyTools = (allResult: unknown) => ({ ...(allResult as object), tools: [] });
+
+  function invalidateToolFilter(): void {
+    toolCache = null;
+  }
 
   async function filteredListTools(): Promise<unknown> {
     const now = Date.now();
@@ -85,7 +99,8 @@ export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
     if (toolNames.length === 0) return allResult;
 
     try {
-      const url = `${opts.sidecarUrl.replace(/\/+$/, '')}/allowed-tools`;
+      const base = typeof opts.sidecarUrl === 'string' ? opts.sidecarUrl.replace(/\/+$/, '') : '';
+      const url = `${base}/allowed-tools`;
       const res = await fetch(url, {
         method: 'POST',
         headers: {
@@ -99,9 +114,17 @@ export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
         }),
         signal: AbortSignal.timeout(opts.timeoutMs ?? 2000),
       });
-      if (!res.ok) return allResult;
+      // Auth / server errors: fail closed when configured so the LLM never
+      // sees tools that policy might deny. Call-time checks remain the gate.
+      if (!res.ok) {
+        if (opts.failClosed) return emptyTools(allResult);
+        return allResult;
+      }
       const { allowed } = (await res.json()) as { allowed?: string[] };
-      if (!Array.isArray(allowed)) return allResult;
+      if (!Array.isArray(allowed)) {
+        if (opts.failClosed) return emptyTools(allResult);
+        return allResult;
+      }
 
       const allowedSet = new Set(allowed);
       const filteredTools = toolsArr.filter((t: unknown) => {
@@ -112,15 +135,14 @@ export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
       toolCache = { result, expiry: now + TOOL_CACHE_TTL_MS };
       return result;
     } catch {
-      // On any error, fail open — show all tools. Policy still blocks at call time.
+      // Network/timeout: honour failClosed for the tool *list* as well.
+      if (opts.failClosed) return emptyTools(allResult);
       return allResult;
     }
   }
 
-  // Serialise concurrent tool calls against the same handle so two parallel
-  // decisions can't race on a shared state. Volcano's MCP pool is already
-  // serialised per-endpoint, but the wrapper is a defensive boundary.
-  let chain: Promise<unknown> = Promise.resolve();
+  // Concurrent policy checks are safe (HTTP is stateless). We do NOT
+  // serialise callTool — that would cap throughput at 1 in-flight call.
 
   async function guardedCallTool(
     name: string,
@@ -173,13 +195,7 @@ export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
   const wrappedCallTool = (
     name: string,
     args: Record<string, unknown>,
-  ): Promise<unknown> => {
-    const next = chain.then(() => guardedCallTool(name, args));
-    // Swallow errors on the chain itself so a failed call doesn't poison
-    // subsequent ones — the caller still receives the rejection from `next`.
-    chain = next.catch(() => undefined);
-    return next;
-  };
+  ): Promise<unknown> => guardedCallTool(name, args);
 
   // Reconstruct the handle, preserving identity. We deliberately mirror the
   // SDK's MCPHandle shape rather than `Object.assign` so accidental additions
@@ -192,7 +208,15 @@ export function wrapMCP(handle: MCPHandle, opts: WrapOptions): MCPHandle {
     process: handle.process,
     listTools: (filterTools ? filteredListTools : originalListTools) as MCPHandle['listTools'],
     callTool: wrappedCallTool,
-    cleanup: originalCleanup,
+    cleanup: async (...args: Parameters<NonNullable<MCPHandle['cleanup']>>) => {
+      invalidateToolFilter();
+      try {
+        client.close();
+      } catch {
+        /* ignore */
+      }
+      if (originalCleanup) return originalCleanup(...args);
+    },
   };
 
   return wrapped;

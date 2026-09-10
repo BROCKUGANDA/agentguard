@@ -7,6 +7,20 @@ import type { QueryClient } from '@tanstack/react-query';
 import { getTenantId } from './api';
 
 function wsUrl(): string {
+  // Settings page override (same key as the HTTP client).
+  try {
+    const raw = localStorage.getItem('agentguard.preferences');
+    if (raw) {
+      const prefs = JSON.parse(raw) as { wsUrl?: string };
+      if (prefs.wsUrl && prefs.wsUrl.trim().length > 0) {
+        const url = new URL(prefs.wsUrl.trim());
+        url.searchParams.set('tenant', getTenantId());
+        return url.toString();
+      }
+    }
+  } catch {
+    /* fall through */
+  }
   const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env;
   const v = env?.VITE_WS_URL;
   // Explicit override wins. Otherwise derive from the page origin so the

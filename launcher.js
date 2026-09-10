@@ -95,8 +95,12 @@ function serveDashboard(req, res) {
   // SPA fallback: any path without an extension → index.html
   if (!path.extname(urlPath)) urlPath = "/index.html";
 
-  const filePath = path.join(DASHBOARD_DIR, urlPath);
-  if (!filePath.startsWith(DASHBOARD_DIR)) {
+  // Resolve + require the path to live under DASHBOARD_DIR. A bare
+  // startsWith(DASHBOARD_DIR) is bypassable via sibling prefixes
+  // (e.g. /app/dashboard/dist-secret). Compare with path.sep boundary.
+  const filePath = path.resolve(DASHBOARD_DIR, "." + path.posix.normalize(urlPath));
+  const root = path.resolve(DASHBOARD_DIR);
+  if (filePath !== root && !filePath.startsWith(root + path.sep)) {
     res.writeHead(403);
     res.end("forbidden");
     return;

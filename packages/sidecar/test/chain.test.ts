@@ -1,10 +1,14 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   canonicalJSON,
   computeEntryHash,
   verifyChain,
   type AuditRecord,
 } from '../src/audit/chain.js';
+import { AuditStore } from '../src/audit/store.js';
 
 const GENESIS = '0'.repeat(64);
 
@@ -130,5 +134,30 @@ describe('Audit hash chain', () => {
     const result = verifyChain([rec]);
     expect(result.valid).toBe(false);
     expect(result.brokenAt).toBe(1);
+  });
+});
+
+describe('AuditStore retention purge re-chains', () => {
+  it('purgeBefore re-roots the remaining chain so verify still passes', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'agentguard-purge-'));
+    try {
+      const store = new AuditStore(join(tmp, 'audit.sqlite'));
+      const base = Date.now() - 1000;
+      store.append({ ts: base - 10_000, agent_id: 'a', tool: 't1', args: {}, decision: 'allow' });
+      store.append({ ts: base - 5_000, agent_id: 'a', tool: 't2', args: {}, decision: 'deny' });
+      store.append({ ts: base + 1_000, agent_id: 'a', tool: 't3', args: {}, decision: 'allow' });
+      store.append({ ts: base + 2_000, agent_id: 'a', tool: 't4', args: {}, decision: 'allow' });
+
+      const deleted = store.purgeBefore(base);
+      expect(deleted).toBe(2);
+
+      const remaining = store.all();
+      expect(remaining.length).toBe(2);
+      expect(verifyChain(remaining).valid).toBe(true);
+      expect(store.purgeEpoch()).toBe(1);
+      store.close();
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

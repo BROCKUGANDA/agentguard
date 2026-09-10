@@ -51,6 +51,13 @@ export class SqliteDb {
   constructor(path: string, opts: { readonly?: boolean } = {}) {
     silenceExperimentalWarning();
     this.db = new DatabaseSync(path, { readOnly: Boolean(opts.readonly) });
+    // Wait (rather than throw) on concurrent writers — e.g. retention purge
+    // racing a /check append. Prevents transient SQLITE_BUSY on the hot path.
+    try {
+      this.db.exec('PRAGMA busy_timeout = 5000');
+    } catch {
+      /* older node:sqlite may not accept busy_timeout via exec */
+    }
   }
 
   exec(sql: string): void {

@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import { Badge } from '../ui/Badge';
 import { Button } from '../ui/Button';
 import { getStreamState, subscribeStream } from '../../lib/ws';
-import { subscribeSidecarStatus } from '../../lib/api';
+import { getSidecarStatus, subscribeSidecarStatus } from '../../lib/api';
 
 interface HeaderProps {
   title: string;
@@ -14,16 +14,13 @@ interface HeaderProps {
 
 export function Header({ title, subtitle, right }: HeaderProps): JSX.Element {
   const [wsState, setWsState] = useState(getStreamState());
-  const [sidecar, setSidecar] = useState<{ reachable: boolean; lastError?: string }>({
-    reachable: true,
-  });
+  const [sidecar, setSidecar] = useState(getSidecarStatus());
 
   useEffect(() => subscribeStream(setWsState), []);
-  useEffect(() =>
-    subscribeSidecarStatus((s) =>
-      setSidecar({ reachable: s.reachable, lastError: s.lastError }),
-    ),
-  );
+  // Pass the store object by reference — wrapping in a new object every
+  // notify caused an infinite setState → re-render loop (missing deps +
+  // unstable identity).
+  useEffect(() => subscribeSidecarStatus(setSidecar), []);
 
   const wsOnline = wsState.status === 'open';
 

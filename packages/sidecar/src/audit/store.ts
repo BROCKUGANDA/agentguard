@@ -95,6 +95,10 @@ export class AuditStore {
       );
       CREATE INDEX IF NOT EXISTS audit_agent_ts ON audit(agent_id, ts);
       CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+      CREATE TABLE IF NOT EXISTS audit_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
   }
 
@@ -268,10 +272,75 @@ export class AuditStore {
     return r?.decision ?? 'allow';
   }
 
-  /** Delete rows older than `beforeTs`. Returns the number deleted. */
+  /**
+   * Delete rows older than `beforeTs`, then re-root the remaining chain so
+   * the new first row has a genesis `prev_hash` and every subsequent
+   * `entry_hash` is recomputed. Without re-rooting, retention purges leave
+   * the head pointing at a deleted row and `verifyChain` always reports a
+   * false tamper. The purge epoch is recorded in `audit_meta`.
+   */
   purgeBefore(beforeTs: number): number {
     const r = this.db.prepare('DELETE FROM audit WHERE ts < ?').run(beforeTs);
+    if (r.changes > 0) {
+      this.rechainFromHead();
+      const prevEpoch = Number(
+        (this.db.prepare(`SELECT value FROM audit_meta WHERE key = 'purge_epoch'`).get() as
+          | { value: string }
+          | undefined)?.value ?? '0',
+      );
+      this.db
+        .prepare(
+          `INSERT INTO audit_meta (key, value) VALUES ('purge_epoch', ?)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        )
+        .run(String(prevEpoch + 1));
+    }
     return r.changes;
+  }
+
+  /** Rebuild hashes from the current head so the remaining chain is contiguous. */
+  private rechainFromHead(): void {
+    this.db.transactionImmediate(() => {
+      const rows = this.db
+        .prepare('SELECT id, ts, agent_id, tool, args, decision, reason, policy_id, severity FROM audit ORDER BY id ASC')
+        .all() as Array<{
+          id: number;
+          ts: number;
+          agent_id: string;
+          tool: string;
+          args: string;
+          decision: string;
+          reason: string | null;
+          policy_id: string | null;
+          severity: Severity;
+        }>;
+      let prev = GENESIS_HASH;
+      for (const row of rows) {
+        const payload = {
+          ts: row.ts,
+          agent_id: row.agent_id,
+          tool: row.tool,
+          args: JSON.parse(row.args) as Record<string, unknown>,
+          decision: row.decision,
+          reason: row.reason ?? undefined,
+          policy_id: row.policy_id ?? undefined,
+          severity: row.severity,
+        };
+        const entryHash = computeEntryHash(prev, payload);
+        this.db
+          .prepare('UPDATE audit SET prev_hash = ?, entry_hash = ? WHERE id = ?')
+          .run(prev, entryHash, row.id);
+        prev = entryHash;
+      }
+    });
+  }
+
+  /** Number of retention re-roots performed (0 = never purged). */
+  purgeEpoch(): number {
+    const row = this.db.prepare(`SELECT value FROM audit_meta WHERE key = 'purge_epoch'`).get() as
+      | { value: string }
+      | undefined;
+    return Number(row?.value ?? '0');
   }
 
   /** Vacuum to reclaim space after purges. */

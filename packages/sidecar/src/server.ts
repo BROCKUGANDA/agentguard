@@ -8,7 +8,7 @@ import { AuditStore } from './audit/store.js';
 import { verifyChain } from './audit/chain.js';
 import { CheckRequestSchema, type Decision } from './policy/schema.js';
 import { initTelemetry } from './observability/otel.js';
-import { BODY_LIMIT, requireAdmin, applyHardening } from './hardening.js';
+import { BODY_LIMIT, requireAdmin, applyHardening, scrubArgsForAudit } from './hardening.js';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import { performance } from 'node:perf_hooks';
@@ -266,13 +266,46 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       return reply.code(400).send({ error: 'invalid request', details: parse.error.format() });
     }
     const started = performance.now();
-    const decision = await ctx.engine.check(parse.data);
+    let decision: Decision;
+    try {
+      decision = await ctx.engine.check(parse.data);
+    } catch (err) {
+      // Fail closed on engine errors (e.g. invalid timezone) so a broken
+      // policy condition cannot 500 the hot path or silently allow calls.
+      app.log.error({ err, tool: parse.data.tool, agentId: parse.data.agentId }, 'policy evaluation failed');
+      return reply.code(500).send({
+        allow: false,
+        error: 'policy_evaluation_failed',
+        reason: 'policy evaluation failed; call denied (fail-closed)',
+        decisionId: 'err_' + Date.now(),
+        latencyMs: performance.now() - started,
+        severity: 'critical',
+      });
+    }
     latencyFor(ctx.id).observe(performance.now() - started);
 
     // Persist the audit row. On redact decisions the audit trail stores the
-    // REDACTED args (what the tool actually received), never the raw PII.
-    const auditedArgs =
+    // REDACTED args (what the tool actually received). Deny (and plain
+    // allow) args are deep-scrubbed so raw PII never lands in SQLite/WS.
+    const sourceArgs =
       decision.allow && decision.redactedArgs ? decision.redactedArgs : parse.data.args;
+    const auditedArgs = scrubArgsForAudit(sourceArgs) as Record<string, unknown>;
+    // Severity: allow → info; deny with critical alert config → critical;
+    // redact decisions → warning; other denies → warning.
+    const matchingSeverity = ctx.engine
+      .alertsConfig()
+      .filter((a) => (decision.allow ? a.on_decision === 'allow' : a.on_decision === 'deny'))
+      .filter((a) => !a.rule_ids?.length || (decision.ruleId && a.rule_ids.includes(decision.ruleId)))
+      .map((a) => a.severity);
+    const severity: 'info' | 'warning' | 'critical' = decision.allow
+      ? decision.redactedArgs
+        ? 'warning'
+        : 'info'
+      : matchingSeverity.includes('critical')
+        ? 'critical'
+        : matchingSeverity.includes('warning')
+          ? 'warning'
+          : 'warning';
     const record = ctx.auditStore.append({
       ts: Date.now(),
       agent_id: parse.data.agentId,
@@ -281,7 +314,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       decision: decision.allow ? 'allow' : 'deny',
       reason: decision.reason,
       policy_id: decision.ruleId,
-      severity: decision.allow ? 'info' : 'warning',
+      severity,
     });
 
     // Dispatch any matching alerts (fire-and-forget).
@@ -294,7 +327,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     // invalidate ['audit'] + ['kpis'] on type 'audit'.
     ctx.stream.broadcast({
       type: 'audit',
-      payload: { decision, record },
+      payload: { decision: { ...decision, severity }, record },
     });
 
     // Wire-compatible decision for @agentguard/core (requires decisionId,
@@ -309,7 +342,7 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       latencyMs: decision.latencyMs,
       // Present only on redact decisions — the masked args to substitute.
       redactedArgs: decision.redactedArgs,
-      severity: decision.allow ? 'info' : 'warning',
+      severity,
     });
   });
 
@@ -326,8 +359,12 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
     );
     const cursorRaw = req.query.cursor;
     if (cursorRaw !== undefined) {
-      const cursor = Number.parseInt(cursorRaw, 10) || undefined;
-      const page = ctx.auditStore.recentPaginated(limit, cursor);
+      // `cursor=` (empty) or `cursor=0` = first page. Any positive int = before that id.
+      // Do NOT use `|| undefined` — that treats a legitimate `0` as missing and
+      // fell through to the flat-array response, breaking dashboard pagination.
+      const n = Number.parseInt(cursorRaw, 10);
+      const beforeId = Number.isFinite(n) && n > 0 ? n : undefined;
+      const page = ctx.auditStore.recentPaginated(limit, beforeId);
       return reply.send({
         items: page.items.map(toAuditEntry),
         nextCursor: page.nextCursor,
@@ -411,17 +448,19 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
       const ctx = resolveTenant(req.headers['x-tenant-id'] as string | undefined);
       if (!ctx) return reply.code(400).send({ error: 'invalid tenant id' });
       const { agentId, role, tools } = req.body ?? {};
-      if (!agentId || !Array.isArray(tools)) {
-        return reply.code(400).send({ error: 'agentId and tools[] required' });
+      if (!agentId || !Array.isArray(tools) || tools.length > 200) {
+        return reply
+          .code(400)
+          .send({ error: 'agentId and tools[] required (tools max 200)' });
       }
       const allowed: string[] = [];
       for (const tool of tools) {
+        if (typeof tool !== 'string' || tool.length === 0) continue;
         const decision = await ctx.engine.check({
           tool,
           args: {},
           agentId,
           role,
-
         });
         if (decision.allow) allowed.push(tool);
       }
@@ -516,31 +555,27 @@ export async function buildServer(deps: ServerDeps): Promise<FastifyInstance> {
         });
       }
 
-      // Snapshot the policy-driven alerts config, install a one-shot test
-      // alert, fire it, then restore — a test-fire must never permanently
-      // replace the tenant's real alert routing.
-      const savedAlerts = ctx.engine.alertsConfig();
-      try {
-        ctx.alertDispatcher.setAlerts([
+      // Ephemeral alert list — never mutates the tenant's live routing, so a
+      // concurrent /check can't accidentally hit the test webhook.
+      const decision: Decision = {
+        allow: false,
+        decisionId: 'test-' + Date.now(),
+        ruleId: rule_id,
+        reason: 'Manual test-fire from dashboard',
+        latencyMs: 0,
+      };
+      await ctx.alertDispatcher.evaluateAndDispatch(
+        decision,
+        { agent_id, tool },
+        [
           {
             on_decision: 'deny',
             severity: severity as 'info' | 'warning' | 'critical',
             webhook: resolvedWebhook,
             rule_ids: [rule_id],
           },
-        ]);
-
-        const decision: Decision = {
-          allow: false,
-          decisionId: 'test-' + Date.now(),
-          ruleId: rule_id,
-          reason: 'Manual test-fire from dashboard',
-          latencyMs: 0,
-        };
-        await ctx.alertDispatcher.evaluateAndDispatch(decision, { agent_id, tool });
-      } finally {
-        ctx.alertDispatcher.setAlerts(savedAlerts);
-      }
+        ],
+      );
 
       return reply.send({ ok: true, webhook: resolvedWebhook });
     }

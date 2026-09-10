@@ -14,18 +14,46 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import crypto from 'node:crypto';
 
 // ─── PII patterns (mirror data-classification regexes for log redaction) ────
+// Credit-card matcher: digit groups with optional separators, no nested
+// quantifiers (the previous `(?:\d[ -]*?){13,16}` form was ReDoS-prone).
 const PII_PATTERNS = [
   { name: 'us_ssn', regex: /\b\d{3}-\d{2}-\d{4}\b/g },
-  { name: 'credit_card', regex: /\b(?:\d[ -]*?){13,16}\b/g },
+  {
+    name: 'credit_card',
+    regex: /\b(?:\d{4}[- ]?){3}\d{4}\b|\b\d{13,16}\b/g,
+  },
   { name: 'email', regex: /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g },
   { name: 'bearer_token', regex: /\bBearer\s+([A-Za-z0-9._\-]{20,})\b/g },
+  { name: 'api_key', regex: /\bsk-[A-Za-z0-9]{20,}\b|\bghp_[A-Za-z0-9]{20,}\b/g },
 ];
 
 export function redactPII(input: unknown): unknown {
   if (typeof input !== 'string') return input;
   let out = input;
   for (const { name, regex } of PII_PATTERNS) {
+    regex.lastIndex = 0;
     out = out.replace(regex, name === 'bearer_token' ? 'Bearer [REDACTED]' : `[REDACTED:${name}]`);
+  }
+  return out;
+}
+
+/**
+ * Deep-scrub PII from an args object before it is written to the audit DB
+ * or broadcast over the WebSocket. Deny decisions previously stored raw
+ * caller args (including SSN/emails), which defeated redaction for blocked
+ * calls. Recursively rewrites every string leaf; leaves non-string values
+ * intact after their stringified form has been scrubbed where applicable.
+ */
+export function scrubArgsForAudit(args: unknown, depth = 0): unknown {
+  if (depth > 12) return args;
+  if (typeof args === 'string') return redactPII(args);
+  if (args === null || typeof args !== 'object') return args;
+  if (Array.isArray(args)) {
+    return args.map((v) => scrubArgsForAudit(v, depth + 1));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(args as Record<string, unknown>)) {
+    out[k] = scrubArgsForAudit(v, depth + 1);
   }
   return out;
 }
@@ -84,15 +112,26 @@ export function requireAdmin(req: FastifyRequest, reply: FastifyReply, done: () 
 // ─── 2. Per-IP rate limit ────────────────────────────────────────────────────
 interface Bucket { tokens: number; refilledAt: number }
 
+const MAX_BUCKETS = 10_000;
+
 export class IPRateLimiter {
   private buckets = new Map<string, Bucket>();
-  constructor(private max: number, private windowMs: number) {}
+  constructor(private max: number, private windowMs: number, private maxBuckets = MAX_BUCKETS) {}
 
   hit(ip: string): boolean {
     const now = Date.now();
     let b = this.buckets.get(ip);
     if (!b) {
+      // Cap map growth: evict oldest (first-inserted) bucket under flood.
+      if (this.buckets.size >= this.maxBuckets) {
+        const oldest = this.buckets.keys().next().value;
+        if (oldest !== undefined) this.buckets.delete(oldest);
+      }
       b = { tokens: this.max, refilledAt: now };
+      this.buckets.set(ip, b);
+    } else {
+      // Refresh insertion order for approximate LRU under cap.
+      this.buckets.delete(ip);
       this.buckets.set(ip, b);
     }
     const elapsed = now - b.refilledAt;
@@ -114,6 +153,10 @@ export class IPRateLimiter {
     for (const [k, b] of this.buckets) {
       if (now - b.refilledAt > this.windowMs * 10) this.buckets.delete(k);
     }
+  }
+
+  get size(): number {
+    return this.buckets.size;
   }
 }
 
@@ -192,18 +235,33 @@ export function generateAdminToken(): string {
 }
 
 // ─── 6. Apply all hardening to a Fastify app ─────────────────────────────────
-export function applyHardening(app: FastifyInstance, opts: { rateLimit?: IPRateLimiter } = {}): IPRateLimiter {
+export function applyHardening(
+  app: FastifyInstance,
+  opts: { rateLimit?: IPRateLimiter } = {},
+): IPRateLimiter {
   const limiter = opts.rateLimit ?? new IPRateLimiter(600, 60_000); // 600 req/min/IP default
-  setInterval(() => limiter.sweep(), 60_000).unref();
+  const sweepTimer = setInterval(() => limiter.sweep(), 60_000);
+  sweepTimer.unref();
+  app.addHook('onClose', async () => {
+    clearInterval(sweepTimer);
+  });
 
   app.addHook('onRequest', applyApiSecurityHeaders);
   app.addHook('onRequest', rateLimitHook(limiter));
 
-  // Wrap all log serializers so PII is scrubbed
+  // Wrap log serializers so PII is scrubbed at every level (info/warn/error).
   if (app.log) {
-    const origInfo = app.log.info.bind(app.log);
-    app.log.info = ((obj: unknown, msg?: string, ...rest: unknown[]) =>
-      origInfo(redactPII(obj), msg ? (redactPII(msg) as string) : msg, ...rest)) as never;
+    const log = app.log as unknown as Record<string, unknown>;
+    for (const level of ['info', 'warn', 'error', 'debug', 'fatal'] as const) {
+      const orig = log[level];
+      if (typeof orig !== 'function') continue;
+      const bound = (orig as Function).bind(app.log);
+      log[level] = ((
+        obj: unknown,
+        msg?: string,
+        ...rest: unknown[]
+      ) => bound(redactPII(obj), msg ? (redactPII(msg) as string) : msg, ...rest)) as never;
+    }
   }
 
   return limiter;

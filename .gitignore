@@ -47,10 +47,13 @@ docs/narration/
 docs/DEMO.md
 docs/DESIGN-SYSTEM.md
 docs/laravel-boost-guidelines.md
-scripts/generate_tts.py
-scripts/record_demo.py
 
-# demo video — too large for git, upload to Devpost separately
+# demo build scratch
+.demo_build/
+demo_video_raw/
+demo_frames/
+
+# demo video binary — too large for git; upload to Devpost / release assets
 demo_video.mp4
 *.mp4
 

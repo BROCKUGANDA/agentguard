@@ -213,4 +213,74 @@ describe('wrapMCP', () => {
       expect.objectContaining({ tool: 'mcp_abc.list' }),
     );
   });
+
+  it('throws on empty sidecarUrl when no client is injected', () => {
+    const original = makeHandle();
+    expect(() =>
+      wrapMCP(original, {
+        sidecarUrl: '   ',
+        agentId: 'a',
+        failClosed: true,
+      }),
+    ).toThrow(AgentGuardUnreachableError);
+  });
+
+  it('runs concurrent callTool without serialising (throughput)', async () => {
+    const original = makeHandle();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const check = vi.fn(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return allowDecision();
+    });
+    const client: PolicyClient = {
+      check,
+      health: async () => ({ ok: true, version: '1' }),
+      close: () => undefined,
+    };
+    const wrapped = wrapMCP(original, {
+      sidecarUrl: 'http://x',
+      agentId: 'a',
+      failClosed: true,
+      client,
+    });
+    await Promise.all([
+      wrapped.callTool('a', {}),
+      wrapped.callTool('b', {}),
+      wrapped.callTool('c', {}),
+    ]);
+    expect(maxInFlight).toBeGreaterThan(1);
+  });
+
+  it('filterTools fails closed (empty list) on allowed-tools HTTP error', async () => {
+    const original = makeHandle({
+      listTools: vi.fn(async () => ({
+        tools: [{ name: 'read_file' }, { name: 'delete_file' }],
+      })),
+    });
+    const client: PolicyClient = {
+      check: async () => allowDecision(),
+      health: async () => ({ ok: true, version: '1' }),
+      close: () => undefined,
+    };
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 500 })) as unknown as typeof fetch;
+    const prev = globalThis.fetch;
+    globalThis.fetch = fetchImpl;
+    try {
+      const wrapped = wrapMCP(original, {
+        sidecarUrl: 'http://sidecar.invalid',
+        agentId: 'a',
+        failClosed: true,
+        filterTools: true,
+        client,
+      });
+      const result = (await wrapped.listTools()) as { tools: unknown[] };
+      expect(result.tools).toEqual([]);
+    } finally {
+      globalThis.fetch = prev;
+    }
+  });
 });

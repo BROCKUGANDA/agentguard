@@ -74,11 +74,15 @@ export class AlertDispatcher {
    */
   async evaluateAndDispatch(
     decision: Decision,
-    ctx: { agent_id: string; tool: string }
+    ctx: { agent_id: string; tool: string },
+    /** Optional one-shot alerts (e.g. test-fire) that bypass `this.alerts`. */
+    ephemeral?: AlertConfig[],
   ): Promise<void> {
-    if (decision.allow) return; // alerts only fire on denies (per policy convention)
-
-    const matching = this.alerts.filter((a) => this.matches(a, decision));
+    // Source: ephemeral list (test-fire) or configured policy alerts.
+    const source = ephemeral ?? this.alerts;
+    // Alerts fire for BOTH allow and deny when `on_decision` matches.
+    // (The old early-return made `on_decision: allow` dead config.)
+    const matching = source.filter((a) => this.matches(a, decision));
     if (matching.length === 0) return;
 
     for (const alert of matching) {
@@ -103,11 +107,9 @@ export class AlertDispatcher {
   }
 
   private matches(alert: AlertConfig, decision: Decision): boolean {
-    if (alert.on_decision !== decision.allow.toString()) {
-      // 'deny' means alert fires when decision.allow is false
-      if (alert.on_decision === 'deny' && decision.allow) return false;
-      if (alert.on_decision === 'allow' && !decision.allow) return false;
-    }
+    // on_decision is 'allow' | 'deny' — fire when it equals the decision outcome.
+    const outcome = decision.allow ? 'allow' : 'deny';
+    if (alert.on_decision !== outcome) return false;
     if (alert.rule_ids && alert.rule_ids.length > 0) {
       if (!decision.ruleId || !alert.rule_ids.includes(decision.ruleId)) return false;
     }
